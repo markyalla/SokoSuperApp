@@ -1,0 +1,65 @@
+services:
+  postgres:
+    image: postgis/postgis:15-3.4
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_MULTIPLE_DATABASES: sokoaccount,sokoshopper,sokodelivery,sokoloan,sokosusu,sokobank
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./internal/utils/init-db.sh:/docker-entrypoint-initdb.d/init-db.sh
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  minio:
+    image: minio/minio
+    ports:
+      - "9000:9000" # MinIO API port
+      - "9001:9001" # MinIO Console port
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    volumes:
+      - minio_data:/data # Persistent storage for MinIO data
+#  api:
+#    build: .
+#    env_file: .env
+#    ports:
+#      - "8082:8082"
+#    depends_on:
+#      postgres:
+#        condition: service_healthy
+#      redis:
+#        condition: service_started
+#      minio:
+#        condition: service_healthy
+
+#  worker:
+#    build: .
+#    env_file: .env
+#    command: ["./worker"]
+#    depends_on:
+#      postgres:
+#        condition: service_healthy
+#      redis:
+#        condition: service_started
+#      minio:
+#        condition: service_healthy
+
+volumes:
+  minio_data:

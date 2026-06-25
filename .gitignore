@@ -1,0 +1,24 @@
+# Binaries for built server
+sokoapp
+sokoapp.exe
+
+# Environment variables
+# Ignore all .env files, but keep the example
+.env
+.env.*
+!.env.example
+
+# Test and coverage artifacts
+*.test
+*.out
+*.prof
+
+# IDEs / Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS-specific files
+.DS_Store
+Thumbs.db
