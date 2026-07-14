@@ -10,6 +10,7 @@ import (
 	neturl "net/url"
 	"os"
 	"sokoapp/internal/models"
+	"sokoapp/internal/ws"
 	"strconv"
 	"time"
 
@@ -829,7 +830,7 @@ func AcceptDelivery(db, accountDB *gorm.DB) gin.HandlerFunc {
 	}
 }
 
-func UpdateStatus(db *gorm.DB) gin.HandlerFunc {
+func UpdateStatus(db *gorm.DB, hub *ws.Hub) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		deliveryID, err := uuid.Parse(c.Param("id"))
 		if err != nil {
@@ -862,6 +863,22 @@ func UpdateStatus(db *gorm.DB) gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update delivery status"})
 			return
 		}
+
+		// Notify the customer via WebSocket
+		go func() {
+			var assignment models.DeliveryAssignment
+			if err := db.Select("order_id").First(&assignment, "id = ?", deliveryID).Error; err != nil {
+				return
+			}
+			var order models.DeliveryOrder
+			if err := db.Select("user_id").First(&order, "id = ?", assignment.OrderID).Error; err != nil {
+				return
+			}
+			hub.Send(order.UserID.String(), "delivery_status", map[string]string{
+				"delivery_id": deliveryID.String(),
+				"status":      req.Status,
+			})
+		}()
 
 		c.JSON(http.StatusOK, gin.H{"message": "status updated successfully", "status": req.Status})
 	}
@@ -944,13 +961,18 @@ func ToggleOnlineStatus(accountDB *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		now := time.Now()
 		updates := map[string]any{
 			"is_online":    req.IsOnline,
 			"is_available": req.IsOnline,
-			"updated_at":   time.Now(),
+			"updated_at":   now,
 		}
-		// Going offline also clears coordinates so stale location isn't used
-		if !req.IsOnline {
+		if req.IsOnline {
+			// Baseline timestamp so the stale-driver sweep has something to
+			// check even in the few seconds before the first GPS ping lands.
+			updates["last_location_at"] = &now
+		} else {
+			// Going offline also clears coordinates so stale location isn't used
 			updates["current_lat"] = nil
 			updates["current_lng"] = nil
 		}
@@ -965,6 +987,34 @@ func ToggleOnlineStatus(accountDB *gorm.DB) gin.HandlerFunc {
 			status = "online"
 		}
 		c.JSON(http.StatusOK, gin.H{"message": "status updated", "status": status})
+	}
+}
+
+// RegisterPushToken — POST /delivery/driver/push-token (driver)
+// Stores the driver's Expo push token so a new assignment can wake their
+// app with a system notification even while backgrounded or killed.
+func RegisterPushToken(accountDB *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		driverUUID, err := uuid.Parse(c.GetString("user_id"))
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid driver session"})
+			return
+		}
+
+		var req struct {
+			ExpoPushToken string `json:"expo_push_token" binding:"required"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "expo_push_token is required"})
+			return
+		}
+
+		if err := accountDB.Model(&models.User{}).Where("id = ?", driverUUID).
+			Update("expo_push_token", req.ExpoPushToken).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save push token"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"message": "push token registered"})
 	}
 }
 
@@ -1006,7 +1056,11 @@ func UpdateLocation(deliveryDB, shopperDB, accountDB *gorm.DB) gin.HandlerFunc {
 
 		deliveryDB.Model(&models.DeliveryAssignment{}).
 			Where("driver_id = ? AND status IN ?", driverUUID, []string{"assigned", "accepted", "arrived_at_vendor", "picked_up", "in_transit"}).
-			Updates(map[string]any{"updated_at": now})
+			Updates(map[string]any{
+				"current_lat": req.Lat,
+				"current_lng": req.Lng,
+				"updated_at":  now,
+			})
 
 		shopperDB.Model(&models.OrderDelivery{}).
 			Where("driver_id = ? AND status NOT IN ?", driverUUID, []string{"delivered", "cancelled"}).

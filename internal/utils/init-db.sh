@@ -28,7 +28,7 @@ EOSQL
                         CREATE TYPE kyc_status_enum AS ENUM ('pending', 'submitted', 'under_review', 'approved', 'rejected');
                     END IF;
                     IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'role_enum') THEN
-                        CREATE TYPE role_enum AS ENUM ('user', 'driver', 'sokoshopper_admin', 'sokodelivery_admin', 'sokoloan_admin', 'sokosusu_admin', 'sokobank_admin', 'superadmin');
+                        CREATE TYPE role_enum AS ENUM ('user', 'driver', 'artisan', 'sokoshopper_admin', 'sokodelivery_admin', 'sokoloan_admin', 'sokosusu_admin', 'sokobank_admin', 'superadmin');
                     END IF;
                     IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'driver_status_enum') THEN
                         CREATE TYPE driver_status_enum AS ENUM ('pending', 'active', 'suspended', 'offline');

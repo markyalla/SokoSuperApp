@@ -30,6 +30,7 @@ type RoleName string
 const (
 	RoleUser          RoleName = "user"
 	RoleDriver        RoleName = "driver"
+	RoleArtisan       RoleName = "artisan"
 	RoleShopperAdmin  RoleName = "sokoshopper_admin"
 	RoleDeliveryAdmin RoleName = "sokodelivery_admin"
 	RoleLoanAdmin     RoleName = "sokoloan_admin"
@@ -85,6 +86,7 @@ type User struct {
 	IsActive        bool       `gorm:"default:true"                                    json:"is_active"`
 	IsDeleted       bool       `gorm:"default:false"                                   json:"-"`
 	FCMToken        string     `gorm:"column:fcm_token"                                json:"-"`
+	ExpoPushToken   string     `gorm:"column:expo_push_token"                          json:"-"`
 	LastLoginAt     *time.Time `                                                       json:"last_login_at"`
 	CreatedAt       time.Time  `                                                       json:"created_at"`
 	UpdatedAt       time.Time  `                                                       json:"updated_at"`

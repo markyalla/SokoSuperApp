@@ -1,12 +1,15 @@
 package auth
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"net/http"
 	"os"
 	"sokoapp/internal/models"
 	"sokoapp/internal/storage"
+	"sokoapp/internal/utils"
 	"sokoapp/internal/worker"
 	"strings"
 	"time"
@@ -275,9 +278,10 @@ func UpdateMe(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID := c.GetString("user_id")
 		var req struct {
-			FullName    string `json:"full_name"`
-			PhoneNumber string `json:"phone_number"`
-			Email       string `json:"email"`
+			FullName        string `json:"full_name"`
+			PhoneNumber     string `json:"phone_number"`
+			Email           string `json:"email"`
+			ProfileImageURL string `json:"profile_image_url"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -300,6 +304,9 @@ func UpdateMe(db *gorm.DB) gin.HandlerFunc {
 		}
 		if req.Email != "" {
 			updates["email"] = req.Email
+		}
+		if req.ProfileImageURL != "" {
+			updates["profile_image_url"] = req.ProfileImageURL
 		}
 
 		if err := db.Model(&user).Updates(updates).Error; err != nil {
@@ -704,6 +711,163 @@ func getFullImageURL(path string) string {
 	encodedPath := strings.ReplaceAll(path, " ", "%20")
 
 	return apiBaseURL + "/api/v1/media/serve" + encodedPath
+}
+
+// ─────────────────────────────────────────────
+// Forgot Password  →  send OTP
+// ─────────────────────────────────────────────
+
+func ForgotPassword(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req struct {
+			Email string `json:"email" binding:"required,email"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Valid email required"})
+			return
+		}
+
+		var user models.User
+		if err := db.Where("email = ?", req.Email).First(&user).Error; err != nil {
+			// Don't reveal whether the email exists
+			c.JSON(http.StatusOK, gin.H{"message": "If that email is registered you will receive an OTP"})
+			return
+		}
+
+		// Generate 6-digit OTP
+		n, err := rand.Int(rand.Reader, big.NewInt(900000))
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate OTP"})
+			return
+		}
+		otp := fmt.Sprintf("%06d", n.Int64()+100000)
+
+		hash, err := bcrypt.GenerateFromPassword([]byte(otp), bcrypt.MinCost)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to hash OTP"})
+			return
+		}
+
+		// Delete any existing password-reset OTPs for this email
+		db.Where("identifier = ? AND purpose = ?", req.Email, "password_reset").Delete(&models.OTPVerification{})
+
+		record := models.OTPVerification{
+			UserID:     &user.ID,
+			Identifier: req.Email,
+			OTPHash:    string(hash),
+			Purpose:    "password_reset",
+			IsUsed:     false,
+			ExpiresAt:  time.Now().Add(10 * time.Minute),
+		}
+		if err := db.Create(&record).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create OTP"})
+			return
+		}
+
+		// Send email (best-effort — don't fail the request if email is misconfigured)
+		go utils.SendEmail(
+			req.Email,
+			"Your SokoApp password reset code",
+			utils.OTPEmailBody(otp, user.FullName),
+		)
+
+		c.JSON(http.StatusOK, gin.H{"message": "If that email is registered you will receive an OTP"})
+	}
+}
+
+// ─────────────────────────────────────────────
+// Verify OTP
+// ─────────────────────────────────────────────
+
+func VerifyOTP(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req struct {
+			Email string `json:"email" binding:"required,email"`
+			OTP   string `json:"otp"   binding:"required"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		var record models.OTPVerification
+		if err := db.Where("identifier = ? AND purpose = ? AND is_used = false", req.Email, "password_reset").
+			Order("created_at DESC").First(&record).Error; err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid or expired OTP"})
+			return
+		}
+
+		if time.Now().After(record.ExpiresAt) {
+			db.Delete(&record)
+			c.JSON(http.StatusBadRequest, gin.H{"error": "OTP has expired"})
+			return
+		}
+
+		if err := bcrypt.CompareHashAndPassword([]byte(record.OTPHash), []byte(req.OTP)); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Incorrect OTP"})
+			return
+		}
+
+		// Mark as verified so reset-password can proceed
+		db.Model(&record).Update("is_used", true)
+
+		c.JSON(http.StatusOK, gin.H{"message": "OTP verified"})
+	}
+}
+
+// ─────────────────────────────────────────────
+// Reset Password
+// ─────────────────────────────────────────────
+
+func ResetPassword(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req struct {
+			Email           string `json:"email"            binding:"required,email"`
+			NewPassword     string `json:"new_password"     binding:"required,min=8"`
+			ConfirmPassword string `json:"confirm_password" binding:"required"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		if req.NewPassword != req.ConfirmPassword {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Passwords do not match"})
+			return
+		}
+
+		// Check a verified OTP exists for this email
+		var record models.OTPVerification
+		if err := db.Where("identifier = ? AND purpose = ? AND is_used = true", req.Email, "password_reset").
+			Order("created_at DESC").First(&record).Error; err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "OTP not verified. Please start the reset flow again"})
+			return
+		}
+
+		// Guard against stale verified OTPs (allow 15 min window after verification)
+		if time.Now().After(record.ExpiresAt.Add(5 * time.Minute)) {
+			db.Delete(&record)
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Session expired. Please start again"})
+			return
+		}
+
+		hash, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to hash password"})
+			return
+		}
+
+		if err := db.Model(&models.User{}).Where("email = ?", req.Email).
+			Update("password_hash", string(hash)).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update password"})
+			return
+		}
+
+		// Clean up
+		db.Delete(&record)
+
+		c.JSON(http.StatusOK, gin.H{"message": "Password reset successful"})
+	}
 }
 
 // buildUserResponse produces a consistent user payload across all auth endpoints.

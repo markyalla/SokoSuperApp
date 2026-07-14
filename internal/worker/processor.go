@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"sokoapp/internal/db"
 	"sokoapp/internal/models"
 	"time"
@@ -54,6 +55,33 @@ func (processor *RedisTaskProcessor) ProcessTaskProcessKYC(ctx context.Context, 
 	return err
 }
 
+// haversineKm returns the great-circle distance between two coordinates, in
+// kilometers. Mirrors the same formula SokoWeb's admin "Assign Nearest
+// Driver" button uses, so both paths pick the same driver.
+func haversineKm(lat1, lng1, lat2, lng2 float64) float64 {
+	const earthRadiusKm = 6371.0
+	dLat := (lat2 - lat1) * math.Pi / 180
+	dLng := (lng2 - lng1) * math.Pi / 180
+	a := math.Sin(dLat/2)*math.Sin(dLat/2) +
+		math.Cos(lat1*math.Pi/180)*math.Cos(lat2*math.Pi/180)*math.Sin(dLng/2)*math.Sin(dLng/2)
+	return earthRadiusKm * 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
+}
+
+// vehicleMatches treats "motorbike" (the customer-facing vehicle choice) and
+// "motorcycle" (the DriverProfile.vehicle_type enum value) as the same
+// vehicle — everything else must match exactly, since a van/truck-sized item
+// genuinely can't ride on a bicycle or motorbike.
+func vehicleMatches(requested, candidate string) bool {
+	if requested == "" {
+		return true
+	}
+	if requested == candidate {
+		return true
+	}
+	isMotorbike := func(v string) bool { return v == "motorbike" || v == "motorcycle" }
+	return isMotorbike(requested) && isMotorbike(candidate)
+}
+
 func (processor *RedisTaskProcessor) ProcessTaskAssignDriver(ctx context.Context, t *asynq.Task) error {
 	var payload AssignDriverPayload
 	if err := json.Unmarshal(t.Payload(), &payload); err != nil {
@@ -62,34 +90,69 @@ func (processor *RedisTaskProcessor) ProcessTaskAssignDriver(ctx context.Context
 
 	log.Printf("Worker: Attempting to assign driver for Assignment %s", payload.AssignmentID)
 
-	// 1. Logic to find an available driver from models.DriverProfile
-	// In a real scenario, use PostGIS to find the closest driver
-	var driver models.DriverProfile
-	err := processor.dbs.Account.Preload("User").
-		Where("is_online = ? AND is_available = ?", true, true).First(&driver).Error
-	if err != nil {
-		log.Printf("Worker: No drivers available for assignment %s", payload.AssignmentID)
+	var assignment models.DeliveryAssignment
+	if err := processor.dbs.Delivery.Where("id = ?", payload.AssignmentID).First(&assignment).Error; err != nil {
+		log.Printf("Worker: Assignment %s not found: %v", payload.AssignmentID, err)
 		return err
 	}
 
-	// 2. Update Assignment status and link driver
-	err = processor.dbs.Delivery.Model(&models.DeliveryAssignment{}).
-		Where("id = ?", payload.AssignmentID).
-		Updates(map[string]interface{}{
-			"driver_user_id": driver.UserID,
-			"status":         models.DelAccepted,
-			"updated_at":     time.Now(),
-		}).Error
-
-	if err == nil {
-		// 3. Mark driver unavailable until this delivery is complete
-		processor.dbs.Account.Model(&models.DriverProfile{}).
-			Where("user_id = ?", driver.UserID).
-			Update("is_available", false)
-		log.Printf("Worker: Notification sent to Driver %s and User for Assignment %s", driver.User.FullName, payload.AssignmentID)
+	// 1. Find the nearest online, available driver whose vehicle can
+	// actually carry this delivery (a van/truck-sized item can't ride on a
+	// motorbike or bicycle) — same rule SokoWeb's manual "nearest driver"
+	// assignment uses.
+	var candidates []models.DriverProfile
+	if err := processor.dbs.Account.Preload("User").
+		Where("is_online = ? AND is_available = ? AND current_lat IS NOT NULL AND current_lng IS NOT NULL", true, true).
+		Find(&candidates).Error; err != nil {
+		log.Printf("Worker: failed to query drivers for assignment %s: %v", payload.AssignmentID, err)
+		return err
 	}
 
-	return err
+	var nearest *models.DriverProfile
+	nearestDistance := math.MaxFloat64
+	for i := range candidates {
+		if !vehicleMatches(payload.VehicleType, string(candidates[i].VehicleType)) {
+			continue
+		}
+		d := haversineKm(assignment.PickupLat, assignment.PickupLng, candidates[i].CurrentLat, candidates[i].CurrentLng)
+		if d < nearestDistance {
+			nearestDistance = d
+			nearest = &candidates[i]
+		}
+	}
+	if nearest == nil {
+		err := fmt.Errorf("no online %s driver available for assignment %s", payload.VehicleType, payload.AssignmentID)
+		log.Printf("Worker: %v", err)
+		return err
+	}
+
+	// 2. Update Assignment status and link driver — guarded by status so
+	// this never clobbers an admin who manually assigned this same
+	// assignment in SokoWeb while this task was queued/retrying. If the row
+	// is no longer pending/broadcast, someone already handled it: treat that
+	// as success (nothing to do), not a failure to retry.
+	res := processor.dbs.Delivery.Model(&models.DeliveryAssignment{}).
+		Where("id = ? AND status IN ?", payload.AssignmentID, []models.DeliveryStatus{models.DelPending, models.DelBroadcast}).
+		Updates(map[string]interface{}{
+			"driver_id":  nearest.UserID,
+			"status":     models.DelAssigned,
+			"updated_at": time.Now(),
+		})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		log.Printf("Worker: assignment %s already handled (likely assigned manually) — skipping", payload.AssignmentID)
+		return nil
+	}
+
+	// 3. Mark driver unavailable until this delivery is complete
+	processor.dbs.Account.Model(&models.DriverProfile{}).
+		Where("user_id = ?", nearest.UserID).
+		Update("is_available", false)
+	log.Printf("Worker: Assigned driver %s (%.1f km away) to assignment %s", nearest.User.FullName, nearestDistance, payload.AssignmentID)
+
+	return nil
 }
 
 func (processor *RedisTaskProcessor) Start() error {

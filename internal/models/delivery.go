@@ -65,6 +65,10 @@ type DeliveryAssignment struct {
 	DropoffLat       float64        `gorm:"type:decimal(10,8);not null"`
 	DropoffLng       float64        `gorm:"type:decimal(11,8);not null"`
 	DistanceKm       *float64       `gorm:"type:decimal(8,3)"`
+	// Driver's live GPS position while this delivery is active — kept in
+	// sync by the same /driver/location endpoint that updates DriverProfile.
+	CurrentLat *float64 `gorm:"type:decimal(10,8)"`
+	CurrentLng *float64 `gorm:"type:decimal(11,8)"`
 	BroadcastAt      *time.Time
 	AcceptedAt       *time.Time
 	ArrivedVendorAt  *time.Time

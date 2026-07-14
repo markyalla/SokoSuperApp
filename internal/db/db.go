@@ -11,22 +11,24 @@ import (
 )
 
 type Manager struct {
-	Account  *gorm.DB
-	Shopper  *gorm.DB
-	Delivery *gorm.DB
-	Loan     *gorm.DB
-	Susu     *gorm.DB
-	Bank     *gorm.DB
+	Account   *gorm.DB
+	Shopper   *gorm.DB
+	Delivery  *gorm.DB
+	Loan      *gorm.DB
+	Susu      *gorm.DB
+	Bank      *gorm.DB
+	SokoIndex *gorm.DB
 }
 
 func NewManager() *Manager {
 	return &Manager{
-		Account:  initDB("sokoaccount"),
-		Shopper:  initDB("sokoshopper"),
-		Delivery: initDB("sokodelivery"),
-		Loan:     initDB("sokoloan"),
-		Susu:     initDB("sokosusu"),
-		Bank:     initDB("sokobank"),
+		Account:   initDB("sokoaccount"),
+		Shopper:   initDB("sokoshopper"),
+		Delivery:  initDB("sokodelivery"),
+		Loan:      initDB("sokoloan"),
+		Susu:      initDB("sokosusu"),
+		Bank:      initDB("sokobank"),
+		SokoIndex: initDB("sokoindex"),
 	}
 }
 

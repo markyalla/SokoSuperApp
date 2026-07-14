@@ -4,7 +4,7 @@ services:
     environment:
       POSTGRES_USER: user
       POSTGRES_PASSWORD: password
-      POSTGRES_MULTIPLE_DATABASES: sokoaccount,sokoshopper,sokodelivery,sokoloan,sokosusu,sokobank
+      POSTGRES_MULTIPLE_DATABASES: sokoaccount,sokoshopper,sokodelivery,sokoloan,sokosusu,sokobank,sokoindex
     ports:
       - "5432:5432"
     volumes:
@@ -36,30 +36,45 @@ services:
       retries: 3
     volumes:
       - minio_data:/data # Persistent storage for MinIO data
-#  api:
-#    build: .
-#    env_file: .env
-#    ports:
-#      - "8082:8082"
-#    depends_on:
-#      postgres:
-#        condition: service_healthy
-#      redis:
-#        condition: service_started
-#      minio:
-#        condition: service_healthy
 
-#  worker:
-#    build: .
-#    env_file: .env
-#    command: ["./worker"]
-#    depends_on:
-#      postgres:
-#        condition: service_healthy
-#      redis:
-#        condition: service_started
-#      minio:
-#        condition: service_healthy
+  api:
+    build: .
+    env_file: .env
+    # .env has DB_HOST/REDIS_HOST/STORAGE_ENDPOINT set to localhost for
+    # running api/worker directly on the host during development — inside
+    # this container "localhost" means the container itself, so the actual
+    # other services must be reached by their compose service name instead.
+    environment:
+      DB_HOST: postgres
+      REDIS_HOST: redis
+      STORAGE_ENDPOINT: minio:9000
+    ports:
+      - "8082:8082"
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      minio:
+        condition: service_healthy
+
+  worker:
+    build: .
+    env_file: .env
+    command: ["./worker"]
+    environment:
+      DB_HOST: postgres
+      REDIS_HOST: redis
+      STORAGE_ENDPOINT: minio:9000
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      minio:
+        condition: service_healthy
 
 volumes:
   minio_data:

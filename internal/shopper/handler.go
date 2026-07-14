@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sokoapp/internal/models"
 	"sokoapp/internal/storage"
+	"sokoapp/internal/ws"
 	"strconv"
 	"strings"
 	"time"
@@ -542,6 +543,8 @@ func GetOrder(db, accountDB *gorm.DB) gin.HandlerFunc {
 			"total_amount":          order.TotalAmount,
 			"delivery_address":      order.DeliveryAddress,
 			"delivery_instructions": order.DeliveryInstructions,
+			"delivery_lat":          order.DeliveryLat,
+			"delivery_lng":          order.DeliveryLng,
 			"created_at":            order.CreatedAt,
 			"paystack_reference":    order.PaystackReference,
 			"store": gin.H{
@@ -1203,7 +1206,7 @@ func GetOrderTracking(db *gorm.DB) gin.HandlerFunc {
 // UpdateOrderTracking
 // ─────────────────────────────────────────────
 
-func UpdateOrderTracking(db *gorm.DB) gin.HandlerFunc {
+func UpdateOrderTracking(db *gorm.DB, hub *ws.Hub) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		orderUUID, err := uuid.Parse(c.Param("id"))
 		if err != nil {
@@ -1271,6 +1274,22 @@ func UpdateOrderTracking(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		// Notify the customer via WebSocket
+		if req.Status != "" {
+			go func() {
+				var order models.Order
+				if err := db.Select("user_id").First(&order, "id = ?", orderUUID).Error; err != nil {
+					return
+				}
+				hub.Send(order.UserID.String(), "order_status", map[string]any{
+					"order_id": orderUUID.String(),
+					"status":   req.Status,
+					"lat":      req.Lat,
+					"lng":      req.Lng,
+				})
+			}()
+		}
+
 		c.JSON(http.StatusOK, gin.H{"message": "Tracking and order status synced successfully"})
 	}
 }
@@ -1307,6 +1326,10 @@ func ListDriverOrderDeliveries(db, accountDB *gorm.DB) gin.HandlerFunc {
 				"created_at":       d.CreatedAt,
 				"updated_at":       d.UpdatedAt,  // used by mobile timer as assignment reference
 				"driver_assigned_at": d.Order.DriverAssignedAt, // set by admin at assignment
+				// Raw delivery fee + the driver's 60% cut of it — the mobile app must never
+				// show the driver the full delivery fee as their own earnings.
+				"delivery_fee":    d.Order.DeliveryFee,
+				"driver_earnings": d.Order.DeliveryFee * 0.6,
 				"order": gin.H{
 					"id":             d.Order.ID,
 					"restaurant":     store.Name,
@@ -1362,6 +1385,14 @@ func GetOrderDeliveryDetail(db, accountDB *gorm.DB) gin.HandlerFunc {
 				"delivery_status":  d.Status,
 				"delivery_address": d.Order.DeliveryAddress,
 				"source":           "shopper",
+				// Customer's own GPS pin captured at checkout — lets the driver's
+				// map show where to actually go, not just a text address.
+				"user_latitude":  d.Order.DeliveryLat,
+				"user_longitude": d.Order.DeliveryLng,
+				// Raw delivery fee + the driver's 60% cut of it — the mobile app must never
+				// show the driver the full delivery fee as their own earnings.
+				"delivery_fee":    d.Order.DeliveryFee,
+				"driver_earnings": d.Order.DeliveryFee * 0.6,
 				"order": gin.H{
 					"id":             d.Order.ID,
 					"restaurant":     store.Name,
