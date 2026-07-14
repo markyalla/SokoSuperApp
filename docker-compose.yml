@@ -1,16 +1,20 @@
 services:
   postgres:
     image: postgis/postgis:15-3.4
+    # Pulled from the .env file sitting next to this compose file (Compose
+    # substitutes ${...} here automatically) — the same DB_USER/DB_PASSWORD
+    # the api/worker containers use to connect, so there's only one place to
+    # change credentials instead of keeping this file and .env in sync by hand.
     environment:
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: password
+      POSTGRES_USER: ${DB_USER:-user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-password}
       POSTGRES_MULTIPLE_DATABASES: sokoaccount,sokoshopper,sokodelivery,sokoloan,sokosusu,sokobank,sokoindex
     ports:
       - "5432:5432"
     volumes:
       - ./internal/utils/init-db.sh:/docker-entrypoint-initdb.d/init-db.sh
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U user"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-user}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -25,9 +29,11 @@ services:
     ports:
       - "9000:9000" # MinIO API port
       - "9001:9001" # MinIO Console port
+    # Same idea as postgres above — pulled from .env so STORAGE_ACCESS_KEY/
+    # STORAGE_SECRET_KEY only ever need to be set in one place.
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_ROOT_USER: ${STORAGE_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${STORAGE_SECRET_KEY:-minioadmin}
     command: server /data --console-address ":9001"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
