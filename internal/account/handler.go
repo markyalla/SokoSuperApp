@@ -16,6 +16,7 @@ type SubmitKYCRequest struct {
     Address     string              `json:"address"`
     City        string              `json:"city"`
     Country     string              `json:"country"`
+    IDMismatch  bool                `json:"id_mismatch"`
 }
 
 func SubmitKYC(db *gorm.DB) gin.HandlerFunc {
@@ -56,6 +57,7 @@ func SubmitKYC(db *gorm.DB) gin.HandlerFunc {
         kyc.Address     = req.Address
         kyc.City        = req.City
         kyc.Country     = req.Country
+        kyc.OCRMismatch = req.IDMismatch
         kyc.Status      = models.KYCSubmitted
         now := time.Now()
         kyc.SubmittedAt = &now

@@ -546,6 +546,71 @@ func recalculateAvgRating(db *gorm.DB, artisanID uuid.UUID) {
 }
 
 // ─────────────────────────────────────────────
+// ListMyRatings — GET /sokoindex/artisan/ratings (artisan)
+// Lets the artisan see who rated them, with the customer's name/email
+// attached — mirrors enrichBookings' customer lookup pattern.
+// ─────────────────────────────────────────────
+
+func ListMyRatings(db, accountDB *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userUUID, err := uuid.Parse(c.GetString("user_id"))
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid user id"})
+			return
+		}
+		artisanID, err := artisanIDForUser(db, userUUID)
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Artisan profile not found"})
+			return
+		}
+
+		var ratings []models.SokoIndexRating
+		db.Where("artisan_id = ?", artisanID).Order("created_at desc").Find(&ratings)
+
+		customerIDs := make([]uuid.UUID, 0, len(ratings))
+		seen := map[uuid.UUID]bool{}
+		for _, r := range ratings {
+			if !seen[r.CustomerID] {
+				seen[r.CustomerID] = true
+				customerIDs = append(customerIDs, r.CustomerID)
+			}
+		}
+
+		customerByID := map[uuid.UUID]models.User{}
+		if len(customerIDs) > 0 {
+			var customers []models.User
+			accountDB.Select("id", "full_name", "email", "phone_number", "profile_image_url").
+				Where("id IN ?", customerIDs).Find(&customers)
+			for _, cu := range customers {
+				customerByID[cu.ID] = cu
+			}
+		}
+
+		out := make([]gin.H, 0, len(ratings))
+		for _, r := range ratings {
+			item := gin.H{
+				"id":         r.ID,
+				"booking_id": r.BookingID,
+				"score":      r.Score,
+				"comment":    r.Comment,
+				"created_at": r.CreatedAt,
+			}
+			if customer, ok := customerByID[r.CustomerID]; ok {
+				item["customer"] = gin.H{
+					"full_name":          customer.FullName,
+					"email":              customer.Email,
+					"phone_number":       customer.PhoneNumber,
+					"profile_image_url":  customer.ProfileImageURL,
+				}
+			}
+			out = append(out, item)
+		}
+
+		c.JSON(http.StatusOK, out)
+	}
+}
+
+// ─────────────────────────────────────────────
 // RecommendArtisan — POST /sokoindex/bookings/:id/recommend (customer)
 // ─────────────────────────────────────────────
 

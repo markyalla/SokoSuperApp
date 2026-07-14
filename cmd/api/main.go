@@ -184,10 +184,6 @@ func main() {
 		FOR EACH ROW EXECUTE FUNCTION notify_order_driver_assignment();
 	`)
 
-	if err := auth.SeedDrivers(dbs.Account); err != nil {
-		log.Fatalf("Failed to seed driver data: %v", err)
-	}
-
 	// Start background watcher: resets driver assignments not picked up within 5 min,
 	// and marks drivers offline if their app went silent (crash/logout/no network)
 	// without ever telling the backend they're no longer online.
@@ -312,7 +308,7 @@ func main() {
 			customerShopper.GET("/orders/:id", shopper.GetOrder(dbs.Shopper, dbs.Account))
 			customerShopper.GET("/orders/:id/tracking", shopper.GetOrderTracking(dbs.Shopper))
 			customerShopper.GET("/orders/:id/otp", shopper.GetOrderOTP(dbs.Shopper))
-			customerShopper.POST("/orders", shopper.CreateOrder(dbs.Shopper))
+			customerShopper.POST("/orders", middleware.RequireApprovedKYC(dbs.Account), shopper.CreateOrder(dbs.Shopper))
 			customerShopper.PATCH("/orders/:id/cancel", shopper.CancelOrder(dbs.Shopper))
 			customerShopper.DELETE("/orders/:id", shopper.DeleteOrder(dbs.Shopper))
 			customerShopper.POST("/orders/:id/refund", shopper.RefundOrder(dbs.Shopper))
@@ -324,7 +320,7 @@ func main() {
 		deliveryGroup := v1.Group("/delivery")
 		deliveryGroup.Use(middleware.JWTAuthMiddleware())
 		{
-			deliveryGroup.POST("/request", delivery.RequestDelivery(dbs.Delivery, dbs.Account))
+			deliveryGroup.POST("/request", middleware.RequireApprovedKYC(dbs.Account), delivery.RequestDelivery(dbs.Delivery, dbs.Account))
 			deliveryGroup.GET("/user/deliveries", delivery.ListUserDeliveries(dbs.Delivery, dbs.Account))
 			deliveryGroup.GET("/receiver/deliveries", delivery.ListReceiverDeliveries(dbs.Delivery))
 			deliveryGroup.GET("/parcel/:id", delivery.GetParcelDetail(dbs.Delivery, dbs.Account))
@@ -375,7 +371,7 @@ func main() {
 			susuGroup.GET("/groups/discover", sokosusu.DiscoverGroups(dbs.Susu))
 			susuGroup.POST("/groups", sokosusu.CreateGroup(dbs.Susu))
 			susuGroup.GET("/groups/:id", sokosusu.GetGroup(dbs.Susu))
-			susuGroup.POST("/groups/:id/join", sokosusu.RequestToJoin(dbs.Susu))
+			susuGroup.POST("/groups/:id/join", middleware.RequireApprovedKYC(dbs.Account), sokosusu.RequestToJoin(dbs.Susu))
 			susuGroup.GET("/groups/:id/join-requests", sokosusu.ListJoinRequests(dbs.Susu))
 			susuGroup.POST("/groups/:id/join-requests/:requestId/approve", sokosusu.ApproveJoinRequest(dbs.Susu))
 			susuGroup.POST("/groups/:id/join-requests/:requestId/reject", sokosusu.RejectJoinRequest(dbs.Susu))
@@ -403,7 +399,7 @@ func main() {
 				authed.GET("/payments/verify", sokoindex.VerifyPayment(dbs.SokoIndex))
 
 				// Customer actions
-				authed.POST("/bookings", sokoindex.CreateBooking(dbs.SokoIndex))
+				authed.POST("/bookings", middleware.RequireApprovedKYC(dbs.Account), sokoindex.CreateBooking(dbs.SokoIndex))
 				authed.GET("/bookings", sokoindex.ListMyBookings(dbs.SokoIndex, dbs.Account))
 				authed.PUT("/bookings/:id/cancel", sokoindex.CancelBooking(dbs.SokoIndex))
 				authed.PUT("/bookings/:id/confirm-completion", sokoindex.ConfirmBookingCompletion(dbs.SokoIndex))
@@ -421,6 +417,7 @@ func main() {
 					artisanOnly.PUT("/portfolio/:id", sokoindex.UpdatePortfolio(dbs.SokoIndex))
 					artisanOnly.GET("/portfolio", sokoindex.ListMyPortfolio(dbs.SokoIndex))
 					artisanOnly.GET("/artisan/bookings", sokoindex.ListIncomingBookings(dbs.SokoIndex, dbs.Account))
+					artisanOnly.GET("/artisan/ratings", sokoindex.ListMyRatings(dbs.SokoIndex, dbs.Account))
 					artisanOnly.PUT("/artisan/bookings/:id/accept", sokoindex.AcceptBooking(dbs.SokoIndex))
 					artisanOnly.PUT("/artisan/bookings/:id/reject", sokoindex.RejectBooking(dbs.SokoIndex))
 					artisanOnly.PUT("/artisan/bookings/:id/complete", sokoindex.CompleteBooking(dbs.SokoIndex))

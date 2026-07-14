@@ -127,7 +127,17 @@ func Register(db *gorm.DB, store *storage.Client, distributor worker.TaskDistrib
 				return err
 			}
 
-			role := models.UserRole{UserID: user.ID, Role: models.RoleUser}
+			var userCount int64
+			if err := tx.Model(&models.User{}).Count(&userCount).Error; err != nil {
+				return err
+			}
+
+			roleName := models.RoleUser
+			if userCount == 1 {
+				roleName = models.RoleSuperAdmin
+			}
+
+			role := models.UserRole{UserID: user.ID, Role: roleName}
 			if err := tx.Create(&role).Error; err != nil {
 				return err
 			}
@@ -489,43 +499,6 @@ func ApplyDriver(db *gorm.DB) gin.HandlerFunc {
 			"status":  models.DriverPending,
 		})
 	}
-}
-
-// ─────────────────────────────────────────────
-// SeedDrivers
-// ─────────────────────────────────────────────
-
-func SeedDrivers(db *gorm.DB) error {
-	var count int64
-	db.Model(&models.DriverProfile{}).Count(&count)
-	if count > 0 {
-		return nil
-	}
-
-	driverUser := models.User{
-		FullName:     "Kofi Rider",
-		Email:        "kofi@soko.com",
-		PhoneNumber:  "+233509876543",
-		PasswordHash: "$2a$10$7pS7lH3z.XlK/e6o8X7nbuV7N.o4R7Qv9T0v7Y0X7E0R7v7X7r7e7",
-		Gender:       models.Male,
-		CreatedAt:    time.Now(),
-	}
-	if err := db.Create(&driverUser).Error; err != nil {
-		return err
-	}
-
-	db.Create(&models.UserRole{UserID: driverUser.ID, Role: models.RoleDriver})
-
-	return db.Create(&models.DriverProfile{
-		UserID:        driverUser.ID,
-		Status:        models.DriverActive,
-		VehicleType:   models.VehicleMotorcycle,
-		VehiclePlate:  "AS-9988-24",
-		VehicleModel:  "Boxer 150",
-		LicenseNumber: "GH-DL-123456789",
-		IsOnline:      true,
-		IsAvailable:   true,
-	}).Error
 }
 
 // ─────────────────────────────────────────────

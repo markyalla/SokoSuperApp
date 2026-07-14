@@ -130,6 +130,11 @@ type KYCSubmission struct {
 	City        string       `gorm:"size:100"          json:"city"`
 	Country     string       `gorm:"size:100;default:'Ghana'" json:"country"`
 
+	// OCRMismatch is set by the mobile app when on-device OCR of the ID photo
+	// didn't find the typed id_number on the card. Submission is never blocked
+	// on this — it's just a flag so the reviewing admin knows to double-check.
+	OCRMismatch bool `gorm:"default:false" json:"ocr_mismatch"`
+
 	CreatedAt time.Time     `json:"created_at"`
 	UpdatedAt time.Time     `json:"updated_at"`
 	Documents []KYCDocument `gorm:"foreignKey:KYCID" json:"documents,omitempty"`
