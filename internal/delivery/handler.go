@@ -12,6 +12,7 @@ import (
 	"sokoapp/internal/models"
 	"sokoapp/internal/ws"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -64,6 +65,34 @@ func geocodeAddress(address string) (lat, lng float64) {
 	return lat, lng
 }
 
+// getFullImageURL turns a relative media path into an absolute URL the app can load.
+// Duplicated per-package (see shopper.getFullImageURL / auth.getFullImageURL) since it's unexported there.
+func getFullImageURL(path string) string {
+	if path == "" {
+		return ""
+	}
+
+	mediaEndpoint := "/api/v1/media/serve/"
+	if strings.Contains(path, mediaEndpoint) {
+		parts := strings.Split(path, mediaEndpoint)
+		path = parts[len(parts)-1]
+	} else if strings.HasPrefix(path, "http") {
+		return path
+	}
+
+	apiBaseURL := strings.TrimRight(os.Getenv("API_BASE_URL"), "/")
+	if apiBaseURL == "" {
+		apiBaseURL = "http://127.0.0.1:8082"
+	}
+
+	if len(path) > 0 && path[0] != '/' {
+		path = "/" + path
+	}
+
+	encodedPath := strings.ReplaceAll(path, " ", "%20")
+	return apiBaseURL + mediaEndpoint + strings.TrimPrefix(encodedPath, "/")
+}
+
 func calculateDistance(lat1, lon1, lat2, lon2 float64) float64 {
 	const R = 6371
 	dLat := (lat2 - lat1) * (math.Pi / 180)
@@ -89,19 +118,30 @@ func calculateDeliveryPrice(vehicleType string, lat1, lon1, lat2, lon2 float64) 
 
 // DeliveryRequest is the payload for creating a new delivery order.
 type DeliveryRequest struct {
-	OrderID             string  `json:"order_id" binding:"omitempty,uuid"`
-	ItemName            string  `json:"item_name" binding:"required"`
-	PickupAddress       string  `json:"pickup_address" binding:"required"`
-	PickupLat           float64 `json:"pickup_lat"`
-	PickupLng           float64 `json:"pickup_lng"`
-	DropoffAddress      string  `json:"dropoff_address" binding:"required"`
-	DropoffLat          float64 `json:"dropoff_lat"`
-	DropoffLng          float64 `json:"dropoff_lng"`
-	PackageDescription  string  `json:"package_description" binding:"required"`
-	VehicleType         string  `json:"vehicle_type" binding:"required,oneof=bicycle motorbike motorcycle car van truck"`
-	ReceiverName        string  `json:"receiver_name" binding:"required"`
-	ReceiverPhone       string  `json:"receiver_phone" binding:"required"`
-	ReceiverSpecificLoc string  `json:"receiver_specific_location"`
+	OrderID        string  `json:"order_id" binding:"omitempty,uuid"`
+	ItemName       string  `json:"item_name" binding:"required"`
+	PickupAddress  string  `json:"pickup_address" binding:"required"`
+	PickupLat      float64 `json:"pickup_lat"`
+	PickupLng      float64 `json:"pickup_lng"`
+	DropoffAddress string  `json:"dropoff_address" binding:"required"`
+	DropoffLat     float64 `json:"dropoff_lat"`
+	DropoffLng     float64 `json:"dropoff_lng"`
+	// Structured dropoff (preferred over freeform geocoding of DropoffAddress):
+	// town/municipality + region (Ghana only, for now) + country, plus an
+	// optional, more specific landmark/suburb/street within that town. Lets
+	// the backend run a scoped Nominatim lookup instead of guessing from
+	// text, and falls back through town → region → country centroids if the
+	// landmark (or even the town) can't be resolved — so two addresses in
+	// the same municipality never end up wildly apart.
+	DropoffLandmark     string `json:"dropoff_landmark"`
+	DropoffTown         string `json:"dropoff_town"`
+	DropoffRegion       string `json:"dropoff_region"`
+	DropoffCountry      string `json:"dropoff_country"`
+	PackageDescription  string `json:"package_description" binding:"required"`
+	VehicleType         string `json:"vehicle_type" binding:"required,oneof=bicycle motorbike motorcycle car van truck"`
+	ReceiverName        string `json:"receiver_name" binding:"required"`
+	ReceiverPhone       string `json:"receiver_phone" binding:"required"`
+	ReceiverSpecificLoc string `json:"receiver_specific_location"`
 	// PayerType: "sender" (default) or "receiver".
 	// When "receiver", the receiver must be a registered SokoApp user.
 	PayerType string `json:"payer_type" binding:"required,oneof=sender receiver"`
@@ -136,10 +176,22 @@ func RequestDelivery(deliveryDB, accountDB *gorm.DB) gin.HandlerFunc {
 		}
 		dropoffLat, dropoffLng := req.DropoffLat, req.DropoffLng
 		if dropoffLat == 0 && dropoffLng == 0 {
-			dropoffLat, dropoffLng = geocodeAddress(req.DropoffAddress)
+			if req.DropoffLandmark != "" || req.DropoffTown != "" || req.DropoffRegion != "" || req.DropoffCountry != "" {
+				dropoffLat, dropoffLng = geocodeStructured(req.DropoffLandmark, req.DropoffTown, req.DropoffRegion, req.DropoffCountry)
+			} else {
+				dropoffLat, dropoffLng = geocodeAddress(req.DropoffAddress)
+			}
 		}
 		totalAmount, distKm := calculateDeliveryPrice(req.VehicleType, pickupLat, pickupLng, dropoffLat, dropoffLng)
 		paymentRef := "SK-DEL-" + uuid.New().String()
+
+		// Best-effort: tell the customer whether this is a same-town, same-region,
+		// or cross-region/country trip, so the fee is legible rather than a bare
+		// number. Dropoff's region/town come straight from the structured form
+		// fields the customer picked; pickup is reverse-geocoded from its GPS
+		// since that's all we have for it.
+		pickupRegion, pickupTown, pickupCountry, _ := reverseGeocode(pickupLat, pickupLng)
+		tripScope := classifyTripScope(pickupCountry, pickupRegion, pickupTown, req.DropoffCountry, req.DropoffRegion, req.DropoffTown)
 
 		order := models.DeliveryOrder{
 			UserID:                userUUID,
@@ -163,6 +215,11 @@ func RequestDelivery(deliveryDB, accountDB *gorm.DB) gin.HandlerFunc {
 			SenderName:            sender.FullName,
 			SenderPhone:           sender.PhoneNumber,
 			SenderImageURL:        sender.ProfileImageURL,
+			PickupRegion:          pickupRegion,
+			PickupTown:            pickupTown,
+			DropoffRegion:         req.DropoffRegion,
+			DropoffTown:           req.DropoffTown,
+			TripScope:             tripScope,
 		}
 
 		// --- Receiver-pays validation ---
@@ -194,6 +251,11 @@ func RequestDelivery(deliveryDB, accountDB *gorm.DB) gin.HandlerFunc {
 					"payer_type":      req.PayerType,
 					"status":          order.PaymentStatus,
 					"checkout_url":    nil,
+					"pickup_region":   pickupRegion,
+					"pickup_town":     pickupTown,
+					"dropoff_region":  order.DropoffRegion,
+					"dropoff_town":    order.DropoffTown,
+					"trip_scope":      tripScope,
 				})
 				return
 			}
@@ -205,6 +267,11 @@ func RequestDelivery(deliveryDB, accountDB *gorm.DB) gin.HandlerFunc {
 				"status":          order.PaymentStatus,
 				"checkout_url":    checkoutURL,
 				"reference":       paymentRef,
+				"pickup_region":   pickupRegion,
+				"pickup_town":     pickupTown,
+				"dropoff_region":  order.DropoffRegion,
+				"dropoff_town":    order.DropoffTown,
+				"trip_scope":      tripScope,
 			})
 			return
 		}
@@ -217,6 +284,11 @@ func RequestDelivery(deliveryDB, accountDB *gorm.DB) gin.HandlerFunc {
 			"payer_type":        req.PayerType,
 			"status":            order.PaymentStatus,
 			"receiver_notified": true,
+			"pickup_region":     pickupRegion,
+			"pickup_town":       pickupTown,
+			"dropoff_region":    order.DropoffRegion,
+			"dropoff_town":      order.DropoffTown,
+			"trip_scope":        tripScope,
 		})
 	}
 }
@@ -608,34 +680,69 @@ func GetParcelDetail(db, accountDB *gorm.DB) gin.HandlerFunc {
 
 		status := "pending"
 		riderName := "Assigning driver..."
+		riderPhone := ""
+		riderProfileImage := ""
 		if assignment.ID != uuid.Nil {
 			status = string(assignment.Status)
 			if assignment.DriverUserID != nil {
 				var driver models.User
-				if err := accountDB.Select("full_name").Where("id = ?", assignment.DriverUserID).First(&driver).Error; err == nil {
+				if err := accountDB.Select("full_name, phone_number, profile_image_url").
+					Where("id = ?", assignment.DriverUserID).First(&driver).Error; err == nil {
 					riderName = driver.FullName
+					riderPhone = driver.PhoneNumber
+					riderProfileImage = getFullImageURL(driver.ProfileImageURL)
 				}
 			}
 		}
 
 		c.JSON(http.StatusOK, gin.H{
 			"data": gin.H{
-				"id":               parcel.ID,
-				"status":           status,
-				"payment_status":   parcel.PaymentStatus,
-				"payer_type":       parcel.PayerType,
-				"total_amount":     parcel.TotalAmount,
-				"distance_km":      parcel.DistanceKm,
-				"vehicle_type":     parcel.VehicleType,
-				"description":      parcel.Description,
-				"pickup_address":   parcel.PickupAddress,
-				"dropoff_address":  parcel.DropoffAddress,
-				"receiver_name":    parcel.ReceiverName,
-				"receiver_phone":   parcel.ReceiverPhone,
-				"rider_name":       riderName,
-				"receiver_user_id": parcel.ReceiverUserID,
-				"customer_rating":  assignment.CustomerRating,
+				"id":                  parcel.ID,
+				"status":              status,
+				"payment_status":      parcel.PaymentStatus,
+				"payer_type":          parcel.PayerType,
+				"total_amount":        parcel.TotalAmount,
+				"distance_km":         parcel.DistanceKm,
+				"vehicle_type":        parcel.VehicleType,
+				"description":         parcel.Description,
+				"pickup_address":      parcel.PickupAddress,
+				"dropoff_address":     parcel.DropoffAddress,
+				"receiver_name":       parcel.ReceiverName,
+				"receiver_phone":      parcel.ReceiverPhone,
+				"rider_name":          riderName,
+				"rider_phone":         riderPhone,
+				"rider_profile_image": riderProfileImage,
+				"receiver_user_id":    parcel.ReceiverUserID,
+				"customer_rating":     assignment.CustomerRating,
+				"pickup_region":       parcel.PickupRegion,
+				"pickup_town":         parcel.PickupTown,
+				"dropoff_region":      parcel.DropoffRegion,
+				"dropoff_town":        parcel.DropoffTown,
+				"trip_scope":          parcel.TripScope,
 			},
+		})
+	}
+}
+
+// GetParcelOTP lets the sender/receiver poll for the delivery PIN once the driver
+// has generated it — mirrors shopper.GetOrderOTP for marketplace orders.
+func GetParcelOTP(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		parcelID, err := uuid.Parse(c.Param("id"))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid delivery ID"})
+			return
+		}
+
+		var assignment models.DeliveryAssignment
+		if err := db.Where("order_id = ?", parcelID).Order("created_at desc").First(&assignment).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "delivery not found"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"otp":      assignment.DeliveryPin,
+			"verified": assignment.Status == models.DelDelivered,
 		})
 	}
 }

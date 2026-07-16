@@ -12,8 +12,8 @@ type DeliveryStatus string
 const (
 	DelPending         DeliveryStatus = "pending"
 	DelBroadcast       DeliveryStatus = "broadcast"
-	DelAssigned        DeliveryStatus = "assigned"   // admin assigned, driver not yet accepted
-	DelAccepted        DeliveryStatus = "accepted"   // driver confirmed the job
+	DelAssigned        DeliveryStatus = "assigned" // admin assigned, driver not yet accepted
+	DelAccepted        DeliveryStatus = "accepted" // driver confirmed the job
 	DelArrivedAtVendor DeliveryStatus = "arrived_at_vendor"
 	DelPickedUp        DeliveryStatus = "picked_up"
 	DelInTransit       DeliveryStatus = "in_transit"
@@ -53,22 +53,22 @@ type DeliveryZone struct {
 
 // --- DELIVERY ASSIGNMENTS ---
 type DeliveryAssignment struct {
-	ID               uuid.UUID      `gorm:"type:uuid;primaryKey;default:uuid_generate_v4()"`
-	OrderID          uuid.UUID      `gorm:"not null"`
-	Source           DeliverySource `gorm:"type:delivery_source_enum;default:'sokoshopper'"`
-	DriverUserID     *uuid.UUID     `gorm:"type:uuid;column:driver_id"`
-	Status           DeliveryStatus `gorm:"type:delivery_status_enum;default:'pending'"`
-	PickupAddress    string         `gorm:"not null"`
-	PickupLat        float64        `gorm:"type:decimal(10,8);not null"`
-	PickupLng        float64        `gorm:"type:decimal(11,8);not null"`
-	DropoffAddress   string         `gorm:"not null"`
-	DropoffLat       float64        `gorm:"type:decimal(10,8);not null"`
-	DropoffLng       float64        `gorm:"type:decimal(11,8);not null"`
-	DistanceKm       *float64       `gorm:"type:decimal(8,3)"`
+	ID             uuid.UUID      `gorm:"type:uuid;primaryKey;default:uuid_generate_v4()"`
+	OrderID        uuid.UUID      `gorm:"not null"`
+	Source         DeliverySource `gorm:"type:delivery_source_enum;default:'sokoshopper'"`
+	DriverUserID   *uuid.UUID     `gorm:"type:uuid;column:driver_id"`
+	Status         DeliveryStatus `gorm:"type:delivery_status_enum;default:'pending'"`
+	PickupAddress  string         `gorm:"not null"`
+	PickupLat      float64        `gorm:"type:decimal(10,8);not null"`
+	PickupLng      float64        `gorm:"type:decimal(11,8);not null"`
+	DropoffAddress string         `gorm:"not null"`
+	DropoffLat     float64        `gorm:"type:decimal(10,8);not null"`
+	DropoffLng     float64        `gorm:"type:decimal(11,8);not null"`
+	DistanceKm     *float64       `gorm:"type:decimal(8,3)"`
 	// Driver's live GPS position while this delivery is active — kept in
 	// sync by the same /driver/location endpoint that updates DriverProfile.
-	CurrentLat *float64 `gorm:"type:decimal(10,8)"`
-	CurrentLng *float64 `gorm:"type:decimal(11,8)"`
+	CurrentLat       *float64 `gorm:"type:decimal(10,8)"`
+	CurrentLng       *float64 `gorm:"type:decimal(11,8)"`
 	BroadcastAt      *time.Time
 	AcceptedAt       *time.Time
 	ArrivedVendorAt  *time.Time
@@ -79,12 +79,12 @@ type DeliveryAssignment struct {
 	DeliveryFee      float64 `gorm:"type:decimal(10,2);not null;default:0.00"`
 	DriverEarnings   float64 `gorm:"type:decimal(10,2);not null;default:0.00"`
 	PlatformCut      float64 `gorm:"type:decimal(10,2);not null;default:0.00"`
-	DeliveryPin      string     `gorm:"size:6"`
-	DeliveryPhotoURL string     `gorm:"column:delivery_photo_url"`
-	IsExpress        bool       `gorm:"default:false"`
-	IsFragile        bool       `gorm:"default:false"`
-	CustomerRating   int16      `gorm:"default:0"`
-	CustomerReview   string     `gorm:"type:text"`
+	DeliveryPin      string  `gorm:"size:6"`
+	DeliveryPhotoURL string  `gorm:"column:delivery_photo_url"`
+	IsExpress        bool    `gorm:"default:false"`
+	IsFragile        bool    `gorm:"default:false"`
+	CustomerRating   int16   `gorm:"default:0"`
+	CustomerReview   string  `gorm:"type:text"`
 	RatedAt          *time.Time
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
@@ -107,22 +107,22 @@ type DriverEarning struct {
 
 // --- DELIVERY ORDERS ---
 type DeliveryOrder struct {
-	ID                    uuid.UUID `gorm:"type:uuid;primaryKey;default:uuid_generate_v4()" json:"id"`
-	UserID                uuid.UUID `gorm:"not null" json:"user_id"`
-	Description           string    `gorm:"not null" json:"description"`
-	PackageSize           string    `gorm:"size:20" json:"package_size"`
-	PickupAddress         string    `gorm:"not null" json:"pickup_address"`
-	PickupLat             float64   `gorm:"type:decimal(10,8)" json:"pickup_lat"`
-	PickupLng             float64   `gorm:"type:decimal(11,8)" json:"pickup_lng"`
-	DropoffAddress        string    `gorm:"not null" json:"dropoff_address"`
-	DropoffLat            float64   `gorm:"type:decimal(10,8)" json:"dropoff_lat"`
-	DropoffLng            float64   `gorm:"type:decimal(11,8)" json:"dropoff_lng"`
-	ReceiverName          string    `gorm:"size:150" json:"receiver_name"`
-	ReceiverPhone         string    `gorm:"size:20" json:"receiver_phone"`
-	ReceiverLocationNotes string    `gorm:"type:text" json:"receiver_location_notes"`
-	SenderName            string    `gorm:"size:150" json:"sender_name"`
-	SenderPhone           string    `gorm:"size:20" json:"sender_phone"`
-	SenderImageURL        string    `gorm:"type:text" json:"sender_image_url"`
+	ID                    uuid.UUID  `gorm:"type:uuid;primaryKey;default:uuid_generate_v4()" json:"id"`
+	UserID                uuid.UUID  `gorm:"not null" json:"user_id"`
+	Description           string     `gorm:"not null" json:"description"`
+	PackageSize           string     `gorm:"size:20" json:"package_size"`
+	PickupAddress         string     `gorm:"not null" json:"pickup_address"`
+	PickupLat             float64    `gorm:"type:decimal(10,8)" json:"pickup_lat"`
+	PickupLng             float64    `gorm:"type:decimal(11,8)" json:"pickup_lng"`
+	DropoffAddress        string     `gorm:"not null" json:"dropoff_address"`
+	DropoffLat            float64    `gorm:"type:decimal(10,8)" json:"dropoff_lat"`
+	DropoffLng            float64    `gorm:"type:decimal(11,8)" json:"dropoff_lng"`
+	ReceiverName          string     `gorm:"size:150" json:"receiver_name"`
+	ReceiverPhone         string     `gorm:"size:20" json:"receiver_phone"`
+	ReceiverLocationNotes string     `gorm:"type:text" json:"receiver_location_notes"`
+	SenderName            string     `gorm:"size:150" json:"sender_name"`
+	SenderPhone           string     `gorm:"size:20" json:"sender_phone"`
+	SenderImageURL        string     `gorm:"type:text" json:"sender_image_url"`
 	TotalAmount           float64    `gorm:"type:decimal(10,2);not null" json:"total_amount"`
 	PaymentStatus         string     `gorm:"size:20;default:'pending'" json:"payment_status"`
 	PaystackRef           string     `gorm:"size:100;unique" json:"paystack_ref"`
@@ -130,8 +130,17 @@ type DeliveryOrder struct {
 	ReceiverUserID        *uuid.UUID `gorm:"type:uuid" json:"receiver_user_id"`
 	VehicleType           string     `gorm:"size:30" json:"vehicle_type"`
 	DistanceKm            float64    `gorm:"type:decimal(8,3)" json:"distance_km"`
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
+	// Resolved region/town for pickup (reverse-geocoded from GPS) and dropoff
+	// (from the customer's structured Country/Region/Town/Landmark form input),
+	// plus a same_town/same_region/cross_region/cross_country summary — lets
+	// the app show the customer what they're actually being priced for.
+	PickupRegion  string `gorm:"size:100" json:"pickup_region"`
+	PickupTown    string `gorm:"size:100" json:"pickup_town"`
+	DropoffRegion string `gorm:"size:100" json:"dropoff_region"`
+	DropoffTown   string `gorm:"size:100" json:"dropoff_town"`
+	TripScope     string `gorm:"size:20" json:"trip_scope"`
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 // DriverCashoutRequest tracks cashout requests made by drivers against their
@@ -140,14 +149,14 @@ type DriverCashoutRequest struct {
 	ID           uuid.UUID `gorm:"type:uuid;primaryKey;default:uuid_generate_v4()" json:"id"`
 	DriverUserID uuid.UUID `gorm:"not null" json:"driver_user_id"`
 	Amount       float64   `gorm:"type:decimal(10,2);not null" json:"amount"`
-	Method       string    `gorm:"size:20" json:"method"` // momo | bank
+	Method       string    `gorm:"size:20" json:"method"`                   // momo | bank
 	Status       string    `gorm:"size:20;default:'pending'" json:"status"` // pending | paid | rejected
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 }
 
-func (DeliveryZone) TableName() string            { return "delivery_zones" }
-func (DeliveryAssignment) TableName() string      { return "delivery_assignments" }
-func (DriverEarning) TableName() string           { return "driver_earnings" }
-func (DeliveryOrder) TableName() string           { return "delivery_orders" }
-func (DriverCashoutRequest) TableName() string    { return "driver_cashout_requests" }
+func (DeliveryZone) TableName() string         { return "delivery_zones" }
+func (DeliveryAssignment) TableName() string   { return "delivery_assignments" }
+func (DriverEarning) TableName() string        { return "driver_earnings" }
+func (DeliveryOrder) TableName() string        { return "delivery_orders" }
+func (DriverCashoutRequest) TableName() string { return "driver_cashout_requests" }

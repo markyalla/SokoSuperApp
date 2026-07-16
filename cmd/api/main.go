@@ -325,6 +325,7 @@ func main() {
 			deliveryGroup.GET("/user/deliveries", delivery.ListUserDeliveries(dbs.Delivery, dbs.Account))
 			deliveryGroup.GET("/receiver/deliveries", delivery.ListReceiverDeliveries(dbs.Delivery))
 			deliveryGroup.GET("/parcel/:id", delivery.GetParcelDetail(dbs.Delivery, dbs.Account))
+			deliveryGroup.GET("/parcel/:id/otp", delivery.GetParcelOTP(dbs.Delivery))
 			deliveryGroup.POST("/parcel/:id/pay", delivery.InitiatePayment(dbs.Delivery, dbs.Account))
 			deliveryGroup.GET("/verify-payment", delivery.VerifyDeliveryPayment(dbs.Delivery))
 			deliveryGroup.GET("/estimate", delivery.GetPriceEstimate)
