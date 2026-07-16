@@ -93,6 +93,8 @@ type ArtisanProfile struct {
 	SuspensionReason     string    `gorm:"type:text"                                       json:"suspension_reason,omitempty"`
 	JoiningFeePaid       bool      `gorm:"default:false"                                   json:"joining_fee_paid"`
 	JoiningPaymentRef    string    `gorm:"size:255"                                        json:"joining_payment_ref,omitempty"`
+	ContactUnlockPaid    bool      `gorm:"default:false"                                   json:"contact_unlock_paid"`
+	ContactUnlockPaymentRef string `gorm:"size:255"                                        json:"contact_unlock_payment_ref,omitempty"`
 	CreatedAt            time.Time `                                                       json:"created_at"`
 	UpdatedAt            time.Time `                                                       json:"updated_at"`
 }
@@ -171,6 +173,21 @@ type Complaint struct {
 	ResolvedAt         *time.Time      `                                                       json:"resolved_at,omitempty"`
 }
 
+// --- CUSTOMER UNLOCK ---
+// One row per user who has ever paid the one-time customer contact-unlock
+// fee. Once Unlocked is true, that user can see every artisan's phone/email
+// and create bookings for the lifetime of their account — this is not
+// per-artisan or per-booking, unlike the artisan-side unlock below.
+type SokoIndexCustomerUnlock struct {
+	ID            uuid.UUID            `gorm:"type:uuid;primaryKey;default:uuid_generate_v4()" json:"id"`
+	UserID        uuid.UUID            `gorm:"type:uuid;not null;uniqueIndex"                  json:"user_id"`
+	Unlocked      bool                 `gorm:"default:false"                                   json:"unlocked"`
+	PaymentRef    string               `gorm:"size:255"                                        json:"payment_ref,omitempty"`
+	PaymentStatus ContactPaymentStatus `gorm:"type:contact_payment_status_enum;default:'pending'" json:"payment_status"`
+	CreatedAt     time.Time            `                                                       json:"created_at"`
+	UpdatedAt     time.Time            `                                                       json:"updated_at"`
+}
+
 // --- FEATURE FLAGS ---
 // Singleton row (ID always 1) letting admins toggle SokoIndex payments on/off
 // from SokoWeb. Both default to false so the marketplace is free to use
@@ -190,3 +207,4 @@ func (SokoIndexRating) TableName() string    { return "sokoindex_ratings" }
 func (Recommendation) TableName() string     { return "recommendations" }
 func (Complaint) TableName() string          { return "complaints" }
 func (SokoIndexFeatureFlag) TableName() string { return "sokoindex_feature_flags" }
+func (SokoIndexCustomerUnlock) TableName() string { return "sokoindex_customer_unlocks" }

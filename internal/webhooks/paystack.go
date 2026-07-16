@@ -77,13 +77,24 @@ func HandlePaystack(dbs *db.Manager, distributor worker.TaskDistributor) gin.Han
 			// SokoBank top-up — handled separately
 
 		case strings.HasPrefix(ref, "SK-IDX-CU-"):
-			// SokoIndex contact-unlock payment confirmed
-			dbs.SokoIndex.Model(&models.SokoIndexBooking{}).
-				Where("contact_payment_ref = ?", ref).
+			// SokoIndex customer contact-unlock payment confirmed (one-time,
+			// unlocks every artisan's contact info + the ability to book)
+			dbs.SokoIndex.Model(&models.SokoIndexCustomerUnlock{}).
+				Where("payment_ref = ?", ref).
 				Updates(map[string]any{
-					"contact_unlocked":       true,
-					"contact_payment_status": models.ContactPaymentPaid,
-					"updated_at":             time.Now(),
+					"unlocked":       true,
+					"payment_status": models.ContactPaymentPaid,
+					"updated_at":     time.Now(),
+				})
+
+		case strings.HasPrefix(ref, "SK-IDX-AU-"):
+			// SokoIndex artisan incoming-jobs unlock payment confirmed (one-time,
+			// unlocks customer contact info + accept/reject on every booking)
+			dbs.SokoIndex.Model(&models.ArtisanProfile{}).
+				Where("contact_unlock_payment_ref = ?", ref).
+				Updates(map[string]any{
+					"contact_unlock_paid": true,
+					"updated_at":          time.Now(),
 				})
 
 		case strings.HasPrefix(ref, "SK-IDX-JF-"):

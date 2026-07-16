@@ -24,8 +24,23 @@ func getFeatureFlags(db *gorm.DB) models.SokoIndexFeatureFlag {
 // GetFeatureFlags — GET /sokoindex/feature-flags (public)
 func GetFeatureFlags(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		c.JSON(http.StatusOK, getFeatureFlags(db))
+		flag := getFeatureFlags(db)
+		c.JSON(http.StatusOK, gin.H{
+			"contact_unlock_enabled": flag.ContactUnlockEnabled,
+			"joining_fee_enabled":    flag.JoiningFeeEnabled,
+			"customer_unlock_fee_ghs": customerUnlockFeeGHS(),
+			"artisan_unlock_fee_ghs":  artisanUnlockFeeGHS(),
+			"joining_fee_ghs":         joiningFeeGHS(),
+		})
 	}
+}
+
+// customerUnlockStatus looks up whether a user has already paid the
+// one-time customer contact-unlock fee. A missing row means not unlocked.
+func customerUnlockStatus(db *gorm.DB, userUUID uuid.UUID) models.SokoIndexCustomerUnlock {
+	var unlock models.SokoIndexCustomerUnlock
+	db.Where("user_id = ?", userUUID).First(&unlock)
+	return unlock
 }
 
 // liveArtisansQuery scopes to artisans that are approved, not suspended, AND
@@ -199,25 +214,43 @@ func Me(db, accountDB *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		flags := getFeatureFlags(db)
+		unlockRequired := flags.ContactUnlockEnabled
+		customerUnlocked := !unlockRequired || customerUnlockStatus(db, userUUID).Unlocked
+
 		var profile models.ArtisanProfile
 		if err := db.Where("user_id = ?", userUUID).First(&profile).Error; err == nil {
 			profile.ProfileImagePath = accountImageURL(accountDB, base, profile.UserID)
-			c.JSON(http.StatusOK, gin.H{"is_artisan": true, "profile": profile})
+			c.JSON(http.StatusOK, gin.H{
+				"is_artisan":                true,
+				"profile":                   profile,
+				"customer_unlock_required":  unlockRequired,
+				"customer_unlocked":         customerUnlocked,
+				"artisan_unlock_required":   unlockRequired,
+				"artisan_unlocked":          !unlockRequired || profile.ContactUnlockPaid,
+			})
 			return
 		}
 
 		var application models.ArtisanApplication
 		if err := db.Where("user_id = ?", userUUID).Order("submitted_at desc").First(&application).Error; err == nil {
 			c.JSON(http.StatusOK, gin.H{
-				"is_artisan":       false,
-				"has_applied":      true,
-				"status":           application.Status,
-				"rejection_reason": application.RejectionReason,
+				"is_artisan":                false,
+				"has_applied":               true,
+				"status":                    application.Status,
+				"rejection_reason":          application.RejectionReason,
+				"customer_unlock_required":  unlockRequired,
+				"customer_unlocked":         customerUnlocked,
 			})
 			return
 		}
 
-		c.JSON(http.StatusOK, gin.H{"is_artisan": false, "has_applied": false})
+		c.JSON(http.StatusOK, gin.H{
+			"is_artisan":               false,
+			"has_applied":              false,
+			"customer_unlock_required": unlockRequired,
+			"customer_unlocked":        customerUnlocked,
+		})
 	}
 }
 
@@ -277,7 +310,9 @@ func ListArtisans(db, accountDB *gorm.DB) gin.HandlerFunc {
 }
 
 // ─────────────────────────────────────────────
-// GetArtisanDetail — GET /sokoindex/artisans/:id (public)
+// GetArtisanDetail — GET /sokoindex/artisans/:id (authed)
+// Requires login (moved off the public group) so contact info + the
+// ability to book can be gated per customer's one-time unlock payment.
 // ─────────────────────────────────────────────
 
 func GetArtisanDetail(db, accountDB *gorm.DB) gin.HandlerFunc {
@@ -286,6 +321,11 @@ func GetArtisanDetail(db, accountDB *gorm.DB) gin.HandlerFunc {
 		artisanUUID, err := uuid.Parse(c.Param("id"))
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid artisan id"})
+			return
+		}
+		userUUID, err := uuid.Parse(c.GetString("user_id"))
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid user id"})
 			return
 		}
 
@@ -305,14 +345,22 @@ func GetArtisanDetail(db, accountDB *gorm.DB) gin.HandlerFunc {
 			portfolio[i].ImagePath4 = getFullImageURL(base, portfolio[i].ImagePath4)
 		}
 
+		flags := getFeatureFlags(db)
+		unlockRequired := flags.ContactUnlockEnabled
+		customerUnlocked := !unlockRequired || customerUnlockStatus(db, userUUID).Unlocked
+
 		result := gin.H{
-			"artisan":   profile,
-			"portfolio": portfolio,
+			"artisan":                 profile,
+			"portfolio":               portfolio,
+			"contact_unlock_required": unlockRequired,
+			"customer_unlocked":       customerUnlocked,
+			"can_book":                customerUnlocked,
+			"unlock_fee_ghs":          customerUnlockFeeGHS(),
 		}
 
-		// While the contact-unlock paywall is disabled (default), let customers
-		// see the artisan's phone/email up front, no booking/payment required.
-		if !getFeatureFlags(db).ContactUnlockEnabled {
+		// Full functionality (contact info + booking) once free, or once this
+		// customer has paid the one-time unlock fee.
+		if customerUnlocked {
 			var artisanUser models.User
 			if accountDB.Select("phone_number", "email").Where("id = ?", profile.UserID).First(&artisanUser).Error == nil {
 				result["artisan_phone"] = artisanUser.PhoneNumber

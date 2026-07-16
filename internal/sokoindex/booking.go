@@ -1,6 +1,7 @@
 package sokoindex
 
 import (
+	"errors"
 	"net/http"
 	"sokoapp/internal/models"
 	"time"
@@ -35,6 +36,12 @@ func CreateBooking(db *gorm.DB) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
+		flags := getFeatureFlags(db)
+		if flags.ContactUnlockEnabled && !customerUnlockStatus(db, customerUUID).Unlocked {
+			c.JSON(http.StatusPaymentRequired, gin.H{"error": "Please unlock MySokoIndex to book an artisan"})
+			return
+		}
+
 		artisanUUID, _ := uuid.Parse(req.ArtisanID)
 
 		var artisan models.ArtisanProfile
@@ -84,7 +91,7 @@ func ListMyBookings(db, accountDB *gorm.DB) gin.HandlerFunc {
 			db.Where("customer_id = ?", customerUUID).Order("created_at desc").Find(&bookings)
 		}
 
-		c.JSON(http.StatusOK, enrichBookings(db, accountDB, bookings))
+		c.JSON(http.StatusOK, enrichBookings(db, accountDB, bookings, false))
 	}
 }
 
@@ -112,16 +119,18 @@ func ListIncomingBookings(db, accountDB *gorm.DB) gin.HandlerFunc {
 			db.Where("artisan_id = ?", artisanID).Order("created_at desc").Find(&bookings)
 		}
 
-		c.JSON(http.StatusOK, enrichBookings(db, accountDB, bookings))
+		c.JSON(http.StatusOK, enrichBookings(db, accountDB, bookings, true))
 	}
 }
 
 // enrichBookings batches artisan-profile lookups onto each booking so the
 // mobile app doesn't need N follow-up requests. Mirrors the shopper module's
-// pattern of attaching nested summaries to list responses. While the
-// contact-unlock paywall is disabled (default), it also attaches the
-// customer's contact details so the artisan sees who booked them.
-func enrichBookings(db, accountDB *gorm.DB, bookings []models.SokoIndexBooking) []gin.H {
+// pattern of attaching nested summaries to list responses. When
+// forArtisanViewer is true (the incoming-jobs list), the customer's full
+// contact details (phone/email/image/location) are only attached once
+// contact-unlock is free or this artisan has paid the one-time unlock fee —
+// otherwise only the customer's name is included.
+func enrichBookings(db, accountDB *gorm.DB, bookings []models.SokoIndexBooking, forArtisanViewer bool) []gin.H {
 	artisanIDs := make([]uuid.UUID, 0, len(bookings))
 	seenArtisan := map[uuid.UUID]bool{}
 	customerIDs := make([]uuid.UUID, 0, len(bookings))
@@ -146,9 +155,9 @@ func enrichBookings(db, accountDB *gorm.DB, bookings []models.SokoIndexBooking) 
 		profileByID[p.ID] = p
 	}
 
-	contactOpen := !getFeatureFlags(db).ContactUnlockEnabled
+	unlockRequired := getFeatureFlags(db).ContactUnlockEnabled
 	customerByID := map[uuid.UUID]models.User{}
-	if contactOpen && len(customerIDs) > 0 {
+	if len(customerIDs) > 0 {
 		var customers []models.User
 		accountDB.Select("id", "full_name", "phone_number", "email", "profile_image_url").
 			Where("id IN ?", customerIDs).Find(&customers)
@@ -188,13 +197,22 @@ func enrichBookings(db, accountDB *gorm.DB, bookings []models.SokoIndexBooking) 
 			},
 		}
 		if customer, ok := customerByID[b.CustomerID]; ok {
-			item["customer"] = gin.H{
-				"full_name":          customer.FullName,
-				"phone_number":       customer.PhoneNumber,
-				"email":              customer.Email,
-				"profile_image_url":  customer.ProfileImageURL,
-				"location_text":      b.CustomerLocationText,
+			canSeeFull := !forArtisanViewer || !unlockRequired || artisan.ContactUnlockPaid
+			if canSeeFull {
+				item["customer"] = gin.H{
+					"full_name":          customer.FullName,
+					"phone_number":       customer.PhoneNumber,
+					"email":              customer.Email,
+					"profile_image_url":  customer.ProfileImageURL,
+					"location_text":      b.CustomerLocationText,
+				}
+			} else {
+				item["customer"] = gin.H{"full_name": customer.FullName}
 			}
+		}
+		if forArtisanViewer {
+			item["contact_unlock_required"] = unlockRequired
+			item["artisan_unlocked"] = !unlockRequired || artisan.ContactUnlockPaid
 		}
 		out = append(out, item)
 	}
@@ -257,25 +275,38 @@ func GetBooking(db, accountDB *gorm.DB) gin.HandlerFunc {
 			},
 		}
 
-		if isCustomer && booking.ContactUnlocked {
-			var artisanUser models.User
-			if accountDB.Select("phone_number").Where("id = ?", artisan.UserID).First(&artisanUser).Error == nil {
-				result["artisan_phone"] = artisanUser.PhoneNumber
+		unlockRequired := getFeatureFlags(db).ContactUnlockEnabled
+
+		if isCustomer {
+			customerFullyUnlocked := !unlockRequired || customerUnlockStatus(db, callerUUID).Unlocked
+			if customerFullyUnlocked {
+				var artisanUser models.User
+				if accountDB.Select("phone_number").Where("id = ?", artisan.UserID).First(&artisanUser).Error == nil {
+					result["artisan_phone"] = artisanUser.PhoneNumber
+				}
 			}
 		}
 
-		// While the contact-unlock paywall is disabled (default), the artisan
-		// sees who booked them immediately, same as the incoming-bookings list.
-		if isArtisan && !getFeatureFlags(db).ContactUnlockEnabled {
+		// The artisan sees who booked them once contact-unlock is free, or once
+		// this artisan has paid the one-time incoming-jobs unlock fee. Until
+		// then, only the customer's name (already fetched below) is shown.
+		if isArtisan {
+			artisanFullyUnlocked := !unlockRequired || artisan.ContactUnlockPaid
+			result["contact_unlock_required"] = unlockRequired
+			result["artisan_unlocked"] = artisanFullyUnlocked
 			var customerUser models.User
 			if accountDB.Select("full_name", "phone_number", "email", "profile_image_url").
 				Where("id = ?", booking.CustomerID).First(&customerUser).Error == nil {
-				result["customer"] = gin.H{
-					"full_name":         customerUser.FullName,
-					"phone_number":      customerUser.PhoneNumber,
-					"email":             customerUser.Email,
-					"profile_image_url": customerUser.ProfileImageURL,
-					"location_text":     booking.CustomerLocationText,
+				if artisanFullyUnlocked {
+					result["customer"] = gin.H{
+						"full_name":         customerUser.FullName,
+						"phone_number":      customerUser.PhoneNumber,
+						"email":             customerUser.Email,
+						"profile_image_url": customerUser.ProfileImageURL,
+						"location_text":     booking.CustomerLocationText,
+					}
+				} else {
+					result["customer"] = gin.H{"full_name": customerUser.FullName}
 				}
 			}
 		}
@@ -317,22 +348,37 @@ func AcceptBooking(db *gorm.DB) gin.HandlerFunc {
 			c.JSON(http.StatusForbidden, gin.H{"error": "Not your booking"})
 			return
 		}
-
-		// While the contact-unlock paywall is disabled (default), accepting a
-		// booking bypasses payment and unlocks contact immediately for free.
-		extra := map[string]interface{}{}
-		if !getFeatureFlags(db).ContactUnlockEnabled {
-			extra["contact_unlocked"] = true
-			extra["contact_payment_status"] = models.ContactPaymentBypassed
+		if err := requireArtisanUnlocked(db, artisanID); err != nil {
+			c.JSON(http.StatusPaymentRequired, gin.H{"error": err.Error()})
+			return
 		}
 
-		if err := updateBookingStatus(db, booking.ID, models.SokoIndexBookingPending, models.SokoIndexBookingAccepted, extra); err != nil {
+		if err := updateBookingStatus(db, booking.ID, models.SokoIndexBookingPending, models.SokoIndexBookingAccepted, nil); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Booking is not pending"})
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"message": "Booking accepted"})
 	}
 }
+
+// requireArtisanUnlocked returns an error when the contact-unlock paywall is
+// enabled and this artisan has not yet paid the one-time incoming-jobs
+// unlock fee — blocking accept/reject until they do.
+func requireArtisanUnlocked(db *gorm.DB, artisanID uuid.UUID) error {
+	if !getFeatureFlags(db).ContactUnlockEnabled {
+		return nil
+	}
+	var artisan models.ArtisanProfile
+	if err := db.Select("contact_unlock_paid").Where("id = ?", artisanID).First(&artisan).Error; err != nil {
+		return gorm.ErrRecordNotFound
+	}
+	if !artisan.ContactUnlockPaid {
+		return errArtisanNotUnlocked
+	}
+	return nil
+}
+
+var errArtisanNotUnlocked = errors.New("Unlock incoming jobs before you can accept or reject bookings")
 
 // ─────────────────────────────────────────────
 // RejectBooking — PUT /sokoindex/artisan/bookings/:id/reject (artisan)
@@ -346,6 +392,10 @@ func RejectBooking(db *gorm.DB) gin.HandlerFunc {
 		}
 		if booking.ArtisanID != artisanID {
 			c.JSON(http.StatusForbidden, gin.H{"error": "Not your booking"})
+			return
+		}
+		if err := requireArtisanUnlocked(db, artisanID); err != nil {
+			c.JSON(http.StatusPaymentRequired, gin.H{"error": err.Error()})
 			return
 		}
 

@@ -15,13 +15,26 @@ import (
 	"gorm.io/gorm"
 )
 
-func contactUnlockFeeGHS() float64 {
+// customerUnlockFeeGHS is the one-time fee a customer pays to unlock full
+// MySokoIndex access (every artisan's contact info + the ability to book).
+func customerUnlockFeeGHS() float64 {
 	if v := os.Getenv("SOKOINDEX_CONTACT_UNLOCK_FEE"); v != "" {
 		if f, err := strconv.ParseFloat(v, 64); err == nil {
 			return f
 		}
 	}
-	return 5.00
+	return 30.00
+}
+
+// artisanUnlockFeeGHS is the one-time fee an artisan pays to unlock full
+// visibility into incoming jobs (customer contact info + accept/reject).
+func artisanUnlockFeeGHS() float64 {
+	if v := os.Getenv("SOKOINDEX_ARTISAN_UNLOCK_FEE"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			return f
+		}
+	}
+	return 30.00
 }
 
 func joiningFeeGHS() float64 {
@@ -35,12 +48,14 @@ func joiningFeeGHS() float64 {
 
 // ─────────────────────────────────────────────
 // InitializePayment — POST /sokoindex/payments/initialize
-// body: { "type": "contact_unlock" | "joining_fee", "entity_id": "<booking or profile id>" }
+// body: { "type": "contact_unlock" | "artisan_unlock" | "joining_fee", "entity_id": "<profile id, only for joining_fee>" }
+// contact_unlock (customer) and artisan_unlock (artisan) are one-time,
+// self-referential to the authenticated user — no entity_id needed.
 // ─────────────────────────────────────────────
 
 type InitializePaymentRequest struct {
-	Type     string `json:"type" binding:"required,oneof=contact_unlock joining_fee"`
-	EntityID string `json:"entity_id" binding:"required,uuid"`
+	Type     string `json:"type" binding:"required,oneof=contact_unlock artisan_unlock joining_fee"`
+	EntityID string `json:"entity_id" binding:"omitempty,uuid"`
 }
 
 func InitializePayment(db, accountDB *gorm.DB) gin.HandlerFunc {
@@ -59,8 +74,8 @@ func InitializePayment(db, accountDB *gorm.DB) gin.HandlerFunc {
 		entityUUID, _ := uuid.Parse(req.EntityID)
 
 		flags := getFeatureFlags(db)
-		if req.Type == "contact_unlock" && !flags.ContactUnlockEnabled {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Contact unlock is currently free — no payment needed"})
+		if (req.Type == "contact_unlock" || req.Type == "artisan_unlock") && !flags.ContactUnlockEnabled {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "MySokoIndex is currently free — no payment needed"})
 			return
 		}
 		if req.Type == "joining_fee" && !flags.JoiningFeeEnabled {
@@ -70,24 +85,39 @@ func InitializePayment(db, accountDB *gorm.DB) gin.HandlerFunc {
 
 		var amountGHS float64
 		var refPrefix string
+		var unlockID uuid.UUID
 
 		switch req.Type {
 		case "contact_unlock":
-			var booking models.SokoIndexBooking
-			if err := db.Where("id = ? AND customer_id = ?", entityUUID, userUUID).First(&booking).Error; err != nil {
-				c.JSON(http.StatusNotFound, gin.H{"error": "Booking not found"})
+			var unlock models.SokoIndexCustomerUnlock
+			if err := db.Where("user_id = ?", userUUID).First(&unlock).Error; err != nil {
+				unlock = models.SokoIndexCustomerUnlock{UserID: userUUID, PaymentStatus: models.ContactPaymentPending}
+				if err := db.Create(&unlock).Error; err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to start unlock"})
+					return
+				}
+			}
+			if unlock.Unlocked {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "You have already unlocked MySokoIndex"})
 				return
 			}
-			if booking.Status == models.SokoIndexBookingPending || booking.Status == models.SokoIndexBookingRejected || booking.Status == models.SokoIndexBookingCancelled {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "Booking must be accepted before contact can be unlocked"})
-				return
-			}
-			if booking.ContactUnlocked {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "Contact is already unlocked for this booking"})
-				return
-			}
-			amountGHS = contactUnlockFeeGHS()
+			amountGHS = customerUnlockFeeGHS()
 			refPrefix = "SK-IDX-CU-"
+			unlockID = unlock.ID
+
+		case "artisan_unlock":
+			var profile models.ArtisanProfile
+			if err := db.Where("user_id = ?", userUUID).First(&profile).Error; err != nil {
+				c.JSON(http.StatusNotFound, gin.H{"error": "Artisan profile not found"})
+				return
+			}
+			if profile.ContactUnlockPaid {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "You have already unlocked incoming jobs"})
+				return
+			}
+			amountGHS = artisanUnlockFeeGHS()
+			refPrefix = "SK-IDX-AU-"
+			unlockID = profile.ID
 
 		case "joining_fee":
 			var profile models.ArtisanProfile
@@ -101,6 +131,7 @@ func InitializePayment(db, accountDB *gorm.DB) gin.HandlerFunc {
 			}
 			amountGHS = joiningFeeGHS()
 			refPrefix = "SK-IDX-JF-"
+			unlockID = profile.ID
 		}
 
 		var user models.User
@@ -150,12 +181,17 @@ func InitializePayment(db, accountDB *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		if req.Type == "contact_unlock" {
-			db.Model(&models.SokoIndexBooking{}).Where("id = ?", entityUUID).Updates(map[string]interface{}{
-				"contact_payment_ref": reference,
+		switch req.Type {
+		case "contact_unlock":
+			db.Model(&models.SokoIndexCustomerUnlock{}).Where("id = ?", unlockID).Updates(map[string]interface{}{
+				"payment_ref": reference,
 			})
-		} else {
-			db.Model(&models.ArtisanProfile{}).Where("id = ?", entityUUID).Updates(map[string]interface{}{
+		case "artisan_unlock":
+			db.Model(&models.ArtisanProfile{}).Where("id = ?", unlockID).Updates(map[string]interface{}{
+				"contact_unlock_payment_ref": reference,
+			})
+		case "joining_fee":
+			db.Model(&models.ArtisanProfile{}).Where("id = ?", unlockID).Updates(map[string]interface{}{
 				"joining_payment_ref": reference,
 			})
 		}
@@ -213,10 +249,15 @@ func VerifyPayment(db *gorm.DB) gin.HandlerFunc {
 		now := time.Now()
 		switch {
 		case len(reference) > 10 && reference[:10] == "SK-IDX-CU-":
-			db.Model(&models.SokoIndexBooking{}).Where("contact_payment_ref = ?", reference).Updates(map[string]interface{}{
-				"contact_unlocked":       true,
-				"contact_payment_status": models.ContactPaymentPaid,
-				"updated_at":             now,
+			db.Model(&models.SokoIndexCustomerUnlock{}).Where("payment_ref = ?", reference).Updates(map[string]interface{}{
+				"unlocked":       true,
+				"payment_status": models.ContactPaymentPaid,
+				"updated_at":     now,
+			})
+		case len(reference) > 10 && reference[:10] == "SK-IDX-AU-":
+			db.Model(&models.ArtisanProfile{}).Where("contact_unlock_payment_ref = ?", reference).Updates(map[string]interface{}{
+				"contact_unlock_paid": true,
+				"updated_at":          now,
 			})
 		case len(reference) > 10 && reference[:10] == "SK-IDX-JF-":
 			db.Model(&models.ArtisanProfile{}).Where("joining_payment_ref = ?", reference).Updates(map[string]interface{}{

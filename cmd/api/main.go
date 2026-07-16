@@ -127,6 +127,7 @@ func main() {
 		&models.Portfolio{}, &models.SokoIndexBooking{},
 		&models.SokoIndexRating{}, &models.Recommendation{},
 		&models.Complaint{}, &models.SokoIndexFeatureFlag{},
+		&models.SokoIndexCustomerUnlock{},
 	)
 	dbs.SokoIndex.FirstOrCreate(&models.SokoIndexFeatureFlag{}, models.SokoIndexFeatureFlag{ID: 1})
 
@@ -385,12 +386,14 @@ func main() {
 		{
 			// Public browse (no auth)
 			sokoIndexGroup.GET("/artisans", sokoindex.ListArtisans(dbs.SokoIndex, dbs.Account))
-			sokoIndexGroup.GET("/artisans/:id", sokoindex.GetArtisanDetail(dbs.SokoIndex, dbs.Account))
 			sokoIndexGroup.GET("/feature-flags", sokoindex.GetFeatureFlags(dbs.SokoIndex))
 
 			authed := sokoIndexGroup.Group("")
 			authed.Use(middleware.JWTAuthMiddleware())
 			{
+				// Moved behind auth (was public) so the contact-unlock paywall can be
+				// gated per logged-in customer instead of being all-or-nothing.
+				authed.GET("/artisans/:id", sokoindex.GetArtisanDetail(dbs.SokoIndex, dbs.Account))
 				authed.POST("/apply", sokoindex.Apply(dbs.SokoIndex, dbs.Account))
 				authed.GET("/application/status", sokoindex.GetApplicationStatus(dbs.SokoIndex))
 				authed.GET("/me", sokoindex.Me(dbs.SokoIndex, dbs.Account))
