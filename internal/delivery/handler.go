@@ -118,11 +118,21 @@ func calculateDeliveryPrice(vehicleType string, lat1, lon1, lat2, lon2 float64) 
 
 // DeliveryRequest is the payload for creating a new delivery order.
 type DeliveryRequest struct {
-	OrderID        string  `json:"order_id" binding:"omitempty,uuid"`
-	ItemName       string  `json:"item_name" binding:"required"`
-	PickupAddress  string  `json:"pickup_address" binding:"required"`
-	PickupLat      float64 `json:"pickup_lat"`
-	PickupLng      float64 `json:"pickup_lng"`
+	OrderID       string  `json:"order_id" binding:"omitempty,uuid"`
+	ItemName      string  `json:"item_name" binding:"required"`
+	PickupAddress string  `json:"pickup_address" binding:"required"`
+	PickupLat     float64 `json:"pickup_lat"`
+	PickupLng     float64 `json:"pickup_lng"`
+	// From the phone's own OS-level geocoder (Google/Apple), captured alongside
+	// PickupAddress on the client. Preferred over our own reverse-geocode of
+	// PickupLat/PickupLng for trip-scope classification — it has much richer
+	// real-world coverage of Ghanaian towns than OpenStreetMap/Nominatim, and
+	// matches what the customer already sees in the pickup address field, so
+	// the two never disagree (e.g. resolving to a small suburb instead of the
+	// town the customer sees).
+	PickupTown     string  `json:"pickup_town"`
+	PickupRegion   string  `json:"pickup_region"`
+	PickupCountry  string  `json:"pickup_country"`
 	DropoffAddress string  `json:"dropoff_address" binding:"required"`
 	DropoffLat     float64 `json:"dropoff_lat"`
 	DropoffLng     float64 `json:"dropoff_lng"`
@@ -188,9 +198,15 @@ func RequestDelivery(deliveryDB, accountDB *gorm.DB) gin.HandlerFunc {
 		// Best-effort: tell the customer whether this is a same-town, same-region,
 		// or cross-region/country trip, so the fee is legible rather than a bare
 		// number. Dropoff's region/town come straight from the structured form
-		// fields the customer picked; pickup is reverse-geocoded from its GPS
-		// since that's all we have for it.
-		pickupRegion, pickupTown, pickupCountry, _ := reverseGeocode(pickupLat, pickupLng)
+		// fields the customer picked. Pickup prefers the phone's own OS-level
+		// geocode (req.PickupTown/Region/Country) over our own reverse-geocode
+		// of the raw GPS — Nominatim/OpenStreetMap has much sparser coverage of
+		// Ghanaian towns and can resolve to the wrong nearby locality (e.g. a
+		// small suburb) even though the phone's geocoder already got it right.
+		pickupTown, pickupRegion, pickupCountry := req.PickupTown, req.PickupRegion, req.PickupCountry
+		if pickupTown == "" && pickupRegion == "" {
+			pickupRegion, pickupTown, pickupCountry, _ = reverseGeocode(pickupLat, pickupLng)
+		}
 		tripScope := classifyTripScope(pickupCountry, pickupRegion, pickupTown, req.DropoffCountry, req.DropoffRegion, req.DropoffTown)
 
 		order := models.DeliveryOrder{
