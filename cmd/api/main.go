@@ -142,7 +142,13 @@ func main() {
 	dbs.Delivery.Exec(`
 		CREATE OR REPLACE FUNCTION notify_driver_assignment() RETURNS TRIGGER AS $$
 		BEGIN
-			IF NEW.driver_id IS NOT NULL THEN
+			-- Only push on a genuinely new assignment (driver_id going from
+			-- unset/different to set). Without this guard, every later status
+			-- write on the same row (accept, picked_up, in_transit, delivered)
+			-- also matches "UPDATE OF driver_id, status" below and would
+			-- re-fire the same "New Delivery Assigned" push.
+			IF NEW.driver_id IS NOT NULL
+			   AND (TG_OP = 'INSERT' OR NEW.driver_id IS DISTINCT FROM OLD.driver_id) THEN
 				PERFORM pg_notify('driver_assignment_events', json_build_object(
 					'source', 'delivery',
 					'driver_id', NEW.driver_id::text,
@@ -165,7 +171,13 @@ func main() {
 	dbs.Shopper.Exec(`
 		CREATE OR REPLACE FUNCTION notify_order_driver_assignment() RETURNS TRIGGER AS $$
 		BEGIN
-			IF NEW.driver_id IS NOT NULL THEN
+			-- Only push on a genuinely new assignment (driver_id going from
+			-- unset/different to set). Without this guard, every later status
+			-- write on the same row (accept, picked_up, in_transit, delivered)
+			-- also matches "UPDATE OF driver_id, status" below and would
+			-- re-fire the same "New Delivery Assigned" push.
+			IF NEW.driver_id IS NOT NULL
+			   AND (TG_OP = 'INSERT' OR NEW.driver_id IS DISTINCT FROM OLD.driver_id) THEN
 				PERFORM pg_notify('driver_assignment_events', json_build_object(
 					'source', 'shopper',
 					'driver_id', NEW.driver_id::text,
