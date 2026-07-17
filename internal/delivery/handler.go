@@ -1266,3 +1266,62 @@ func RateParcelDelivery(deliveryDB, accountDB *gorm.DB) gin.HandlerFunc {
 		c.JSON(http.StatusOK, gin.H{"message": "rating submitted", "rating": req.Rating})
 	}
 }
+
+// FileParcelComplaint lets a customer report an issue with the driver on one
+// of their parcel deliveries. Unlike RateParcelDelivery this doesn't require
+// the delivery to be completed yet. If the order has been reassigned (a
+// failed attempt followed by a new driver), the most recent assignment with
+// a driver is the complaint target.
+func FileParcelComplaint(deliveryDB *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		orderID, err := uuid.Parse(c.Param("id"))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid delivery order ID"})
+			return
+		}
+		callerUUID, err := uuid.Parse(c.GetString("user_id"))
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid user id"})
+			return
+		}
+
+		var req struct {
+			Category    string `json:"category"`
+			Description string `json:"description" binding:"required"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		var order models.DeliveryOrder
+		if err := deliveryDB.Where("id = ? AND user_id = ?", orderID, callerUUID).First(&order).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "delivery order not found"})
+			return
+		}
+
+		var assignment models.DeliveryAssignment
+		if err := deliveryDB.Where("order_id = ? AND driver_id IS NOT NULL", orderID).
+			Order("created_at DESC").First(&assignment).Error; err != nil || assignment.DriverUserID == nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "no driver has been assigned to this delivery yet"})
+			return
+		}
+
+		complaint := models.DriverComplaint{
+			OrderID:           orderID,
+			OrderSource:       models.SourceDelivery,
+			ComplainantUserID: callerUUID,
+			AgainstDriverID:   *assignment.DriverUserID,
+			Category:          req.Category,
+			Description:       req.Description,
+			Status:            models.DriverComplaintOpen,
+			CreatedAt:         time.Now(),
+		}
+		if err := deliveryDB.Create(&complaint).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to file complaint"})
+			return
+		}
+
+		c.JSON(http.StatusCreated, gin.H{"message": "Complaint filed, our team will review it", "complaint": complaint})
+	}
+}

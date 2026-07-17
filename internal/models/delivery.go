@@ -38,6 +38,15 @@ const (
 	EarningOnHold  EarningStatus = "on_hold"
 )
 
+type DriverComplaintStatus string
+
+const (
+	DriverComplaintOpen      DriverComplaintStatus = "open"
+	DriverComplaintInReview  DriverComplaintStatus = "in_review"
+	DriverComplaintResolved  DriverComplaintStatus = "resolved"
+	DriverComplaintDismissed DriverComplaintStatus = "dismissed"
+)
+
 // --- DELIVERY ZONES ---
 type DeliveryZone struct {
 	ID        uuid.UUID `gorm:"type:uuid;primaryKey;default:uuid_generate_v4()"`
@@ -155,8 +164,29 @@ type DriverCashoutRequest struct {
 	UpdatedAt    time.Time `json:"updated_at"`
 }
 
+// DriverComplaint lets a customer report an issue with a driver, for either
+// order domain (OrderSource tells the admin UI which table OrderID points
+// into — shopper.Order or DeliveryOrder — since this table is shared by
+// both FileOrderComplaint and FileParcelComplaint).
+type DriverComplaint struct {
+	ID                uuid.UUID             `gorm:"type:uuid;primaryKey;default:uuid_generate_v4()" json:"id"`
+	OrderID           uuid.UUID             `gorm:"type:uuid;not null;index"                         json:"order_id"`
+	OrderSource       DeliverySource        `gorm:"type:delivery_source_enum;not null"               json:"order_source"`
+	ComplainantUserID uuid.UUID             `gorm:"type:uuid;not null;index"                         json:"complainant_user_id"`
+	AgainstDriverID   uuid.UUID             `gorm:"type:uuid;not null;index"                         json:"against_driver_id"`
+	Category          string                `gorm:"size:100"                                         json:"category"`
+	Description       string                `gorm:"type:text;not null"                               json:"description"`
+	Status            DriverComplaintStatus `gorm:"type:driver_complaint_status_enum;default:'open'" json:"status"`
+	DriverAtFault     *bool                 `                                                         json:"driver_at_fault,omitempty"`
+	ResolutionNotes   string                `gorm:"type:text"                                         json:"resolution_notes,omitempty"`
+	ResolvedBy        *uuid.UUID            `gorm:"type:uuid"                                         json:"resolved_by,omitempty"`
+	CreatedAt         time.Time             `gorm:"default:now()"                                     json:"created_at"`
+	ResolvedAt        *time.Time            `                                                         json:"resolved_at,omitempty"`
+}
+
 func (DeliveryZone) TableName() string         { return "delivery_zones" }
 func (DeliveryAssignment) TableName() string   { return "delivery_assignments" }
 func (DriverEarning) TableName() string        { return "driver_earnings" }
 func (DeliveryOrder) TableName() string        { return "delivery_orders" }
 func (DriverCashoutRequest) TableName() string { return "driver_cashout_requests" }
+func (DriverComplaint) TableName() string      { return "driver_complaints" }

@@ -1547,6 +1547,65 @@ func RateOrderDelivery(db, accountDB *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+// FileOrderComplaint lets a customer report an issue with the driver on one
+// of their shopper orders. Unlike RateOrderDelivery this doesn't require the
+// order to be delivered yet — a customer may need to report a problem while
+// the delivery is still in progress. Writes into deliveryDB (sokodelivery)
+// despite living in the shopper package — same cross-DB-write precedent
+// RateOrderDelivery already sets by writing into accountDB.
+func FileOrderComplaint(db, deliveryDB *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		orderID, err := uuid.Parse(c.Param("id"))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid order ID"})
+			return
+		}
+		callerUUID, err := uuid.Parse(c.GetString("user_id"))
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid user id"})
+			return
+		}
+
+		var req struct {
+			Category    string `json:"category"`
+			Description string `json:"description" binding:"required"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		var order models.Order
+		if err := db.Where("id = ? AND user_id = ?", orderID, callerUUID).First(&order).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "order not found"})
+			return
+		}
+
+		var orderDelivery models.OrderDelivery
+		if err := db.Where("order_id = ?", orderID).First(&orderDelivery).Error; err != nil || orderDelivery.DriverID == nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "no driver has been assigned to this order yet"})
+			return
+		}
+
+		complaint := models.DriverComplaint{
+			OrderID:           orderID,
+			OrderSource:       models.SourceShopper,
+			ComplainantUserID: callerUUID,
+			AgainstDriverID:   *orderDelivery.DriverID,
+			Category:          req.Category,
+			Description:       req.Description,
+			Status:            models.DriverComplaintOpen,
+			CreatedAt:         time.Now(),
+		}
+		if err := deliveryDB.Create(&complaint).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to file complaint"})
+			return
+		}
+
+		c.JSON(http.StatusCreated, gin.H{"message": "Complaint filed, our team will review it", "complaint": complaint})
+	}
+}
+
 // UploadMedia handles generic file uploads to MinIO/S3 buckets.
 func UploadMedia(store *storage.Client) gin.HandlerFunc {
 	return func(c *gin.Context) {

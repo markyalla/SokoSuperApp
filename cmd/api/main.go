@@ -78,6 +78,7 @@ func main() {
 	// delivery_status_enum: add 'assigned' between broadcast and accepted
 	dbs.Delivery.Exec("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'delivery_status_enum') THEN CREATE TYPE delivery_status_enum AS ENUM ('pending','broadcast','assigned','accepted','arrived_at_vendor','picked_up','in_transit','arrived_at_customer','delivered','failed','cancelled'); END IF; END $$;")
 	dbs.Delivery.Exec("ALTER TYPE delivery_status_enum ADD VALUE IF NOT EXISTS 'assigned' AFTER 'broadcast';")
+	dbs.Delivery.Exec("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'driver_complaint_status_enum') THEN CREATE TYPE driver_complaint_status_enum AS ENUM ('open', 'in_review', 'resolved', 'dismissed'); END IF; END $$;")
 
 	// sokoindex enums
 	dbs.SokoIndex.Exec("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'artisan_application_status_enum') THEN CREATE TYPE artisan_application_status_enum AS ENUM ('pending', 'approved', 'rejected'); END IF; END $$;")
@@ -105,7 +106,7 @@ func main() {
 	dbs.Delivery.AutoMigrate(
 		&models.DeliveryZone{}, &models.DeliveryAssignment{},
 		&models.DriverEarning{}, &models.DeliveryOrder{},
-		&models.DriverCashoutRequest{},
+		&models.DriverCashoutRequest{}, &models.DriverComplaint{},
 	)
 
 	// sokobank migration
@@ -327,6 +328,7 @@ func main() {
 			customerShopper.POST("/orders/:id/refund", shopper.RefundOrder(dbs.Shopper))
 			customerShopper.POST("/orders/:id/pay", shopper.PayOrder(dbs.Shopper, dbs.Account))
 			customerShopper.POST("/orders/:id/rate", shopper.RateOrderDelivery(dbs.Shopper, dbs.Account))
+			customerShopper.POST("/orders/:id/complaints", shopper.FileOrderComplaint(dbs.Shopper, dbs.Delivery))
 		}
 
 		// Delivery Routes
@@ -342,6 +344,7 @@ func main() {
 			deliveryGroup.GET("/verify-payment", delivery.VerifyDeliveryPayment(dbs.Delivery))
 			deliveryGroup.GET("/estimate", delivery.GetPriceEstimate)
 			deliveryGroup.POST("/parcel/:id/rate", delivery.RateParcelDelivery(dbs.Delivery, dbs.Account))
+			deliveryGroup.POST("/parcel/:id/complaints", delivery.FileParcelComplaint(dbs.Delivery))
 
 			// Driver Specific Routes (matching DriverDashboardScreen.tsx)
 			driver := deliveryGroup.Group("/driver")
