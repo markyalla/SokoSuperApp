@@ -19,7 +19,7 @@ func main() {
 	dbs := db.NewManager()
 
 	redisAddr := fmt.Sprintf("%s:%s", os.Getenv("REDIS_HOST"), os.Getenv("REDIS_PORT"))
-	redisOpt := asynq.RedisClientOpt{Addr: redisAddr}
+	redisOpt := asynq.RedisClientOpt{Addr: redisAddr, Password: os.Getenv("REDIS_PASSWORD")}
 	processor := worker.NewRedisTaskProcessor(redisOpt, dbs)
 
 	log.Println("Starting Asynq worker...")

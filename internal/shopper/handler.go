@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sokoapp/internal/models"
+	"sokoapp/internal/pricing"
 	"sokoapp/internal/storage"
 	"sokoapp/internal/ws"
 	"strconv"
@@ -242,26 +243,31 @@ func GetStore(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		holiday := pricing.ForStore(db, store.Country, time.Now())
+
 		c.JSON(http.StatusOK, gin.H{
-			"id":                  store.ID,
-			"owner_user_id":       store.OwnerUserID,
-			"name":                store.Name,
-			"description":         store.Description,
-			"address":             store.Address,
-			"city":                store.City,
-			"country":             store.Country,
-			"phone_number":        store.PhoneNumber,
-			"email":               store.Email,
-			"logo_url":            getFullImageURL(store.LogoURL),
-			"cover_image_url":     getFullImageURL(store.CoverImageURL),
-			"rating":              store.Rating,
-			"total_reviews":       store.TotalReviews,
-			"is_open":             store.IsOpen,
-			"delivery_fee":        store.DeliveryFee,
-			"min_order_amount":    store.MinOrderAmount,
-			"avg_processing_time": store.AvgProcessingTime,
-			"category":            store.Category,
-			"category_id":         store.CategoryID,
+			"id":                    store.ID,
+			"owner_user_id":         store.OwnerUserID,
+			"name":                  store.Name,
+			"description":           store.Description,
+			"address":               store.Address,
+			"city":                  store.City,
+			"country":               store.Country,
+			"phone_number":          store.PhoneNumber,
+			"email":                 store.Email,
+			"logo_url":              getFullImageURL(store.LogoURL),
+			"cover_image_url":       getFullImageURL(store.CoverImageURL),
+			"rating":                store.Rating,
+			"total_reviews":         store.TotalReviews,
+			"is_open":               store.IsOpen,
+			"delivery_fee":          store.DeliveryFee,
+			"min_order_amount":      store.MinOrderAmount,
+			"avg_processing_time":   store.AvgProcessingTime,
+			"category":              store.Category,
+			"category_id":           store.CategoryID,
+			"holiday_pricing":       holiday.Active,
+			"holiday_name":          holiday.HolidayName,
+			"holiday_surcharge_pct": holiday.SurchargePct,
 		})
 	}
 }
@@ -278,6 +284,10 @@ func GetProducts(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		var store models.Store
+		db.Select("id, country").Where("id = ?", storeUUID).First(&store)
+		holiday := pricing.ForStore(db, store.Country, time.Now())
+
 		products := []models.Product{}
 		if err := db.Where("store_id = ? AND is_available = ?", storeUUID, true).
 			Order("sort_order asc").Find(&products).Error; err != nil {
@@ -287,18 +297,26 @@ func GetProducts(db *gorm.DB) gin.HandlerFunc {
 
 		response := make([]gin.H, 0, len(products))
 		for _, p := range products {
+			price := p.BasePrice
+			if holiday.Active {
+				price = pricing.Round2(p.BasePrice * holiday.Multiplier)
+			}
 			response = append(response, gin.H{
-				"id":           p.ID.String(),
-				"store_id":     p.StoreID.String(),
-				"name":         p.Name,
-				"description":  p.Description,
-				"base_price":   p.BasePrice,
-				"image_url":    getFullImageURL(p.ImageURL),
-				"is_available": p.IsAvailable,
-				"category_id":  p.CategoryID,
-				"sort_order":   p.SortOrder,
-				"created_at":   p.CreatedAt,
-				"updated_at":   p.UpdatedAt,
+				"id":                    p.ID.String(),
+				"store_id":              p.StoreID.String(),
+				"name":                  p.Name,
+				"description":           p.Description,
+				"base_price":            price,
+				"original_price":        p.BasePrice,
+				"holiday_pricing":       holiday.Active,
+				"holiday_name":          holiday.HolidayName,
+				"holiday_surcharge_pct": holiday.SurchargePct,
+				"image_url":             getFullImageURL(p.ImageURL),
+				"is_available":          p.IsAvailable,
+				"category_id":           p.CategoryID,
+				"sort_order":            p.SortOrder,
+				"created_at":            p.CreatedAt,
+				"updated_at":            p.UpdatedAt,
 			})
 		}
 
@@ -341,24 +359,43 @@ func GetProductsByCategory(db *gorm.DB) gin.HandlerFunc {
 
 		// Build store name/logo lookup
 		var stores []models.Store
-		db.Select("id, name, logo_url").Where("id IN ?", storeIDs).Find(&stores)
+		db.Select("id, name, logo_url, country").Where("id IN ?", storeIDs).Find(&stores)
 		storeMap := make(map[uuid.UUID]models.Store)
 		for _, s := range stores {
 			storeMap[s.ID] = s
 		}
 
+		// One holiday lookup per distinct country, not per product.
+		holidayByCountry := make(map[string]pricing.Status)
+		now := time.Now()
+
 		response := make([]gin.H, 0, len(products))
 		for _, p := range products {
 			s := storeMap[p.StoreID]
+			holiday, ok := holidayByCountry[s.Country]
+			if !ok {
+				holiday = pricing.ForStore(db, s.Country, now)
+				holidayByCountry[s.Country] = holiday
+			}
+
+			price := p.BasePrice
+			if holiday.Active {
+				price = pricing.Round2(p.BasePrice * holiday.Multiplier)
+			}
+
 			response = append(response, gin.H{
-				"id":          p.ID.String(),
-				"name":        p.Name,
-				"description": p.Description,
-				"base_price":  p.BasePrice,
-				"image_url":   getFullImageURL(p.ImageURL),
-				"store_id":    p.StoreID.String(),
-				"store_name":  s.Name,
-				"store_logo":  getFullImageURL(s.LogoURL),
+				"id":                    p.ID.String(),
+				"name":                  p.Name,
+				"description":           p.Description,
+				"base_price":            price,
+				"original_price":        p.BasePrice,
+				"holiday_pricing":       holiday.Active,
+				"holiday_name":          holiday.HolidayName,
+				"holiday_surcharge_pct": holiday.SurchargePct,
+				"image_url":             getFullImageURL(p.ImageURL),
+				"store_id":              p.StoreID.String(),
+				"store_name":            s.Name,
+				"store_logo":            getFullImageURL(s.LogoURL),
 			})
 		}
 
@@ -457,6 +494,9 @@ func ListOrders(db, accountDB *gorm.DB) gin.HandlerFunc {
 				"driver_name":          dName,
 				"driver_phone":         dPhone,
 				"driver_profile_image": dProfileImage,
+				"estimated_prep_mins":  order.EstimatedPrepMins,
+				"accepted_at":          order.AcceptedAt,
+				"ready_at":             order.ReadyAt,
 				"store": gin.H{
 					"name":     store.Name,
 					"logo_url": getFullImageURL(store.LogoURL),
@@ -547,6 +587,9 @@ func GetOrder(db, accountDB *gorm.DB) gin.HandlerFunc {
 			"delivery_lng":          order.DeliveryLng,
 			"created_at":            order.CreatedAt,
 			"paystack_reference":    order.PaystackReference,
+			"estimated_prep_mins":   order.EstimatedPrepMins,
+			"accepted_at":           order.AcceptedAt,
+			"ready_at":              order.ReadyAt,
 			"store": gin.H{
 				"name":     store.Name,
 				"logo_url": getFullImageURL(store.LogoURL),
@@ -594,21 +637,33 @@ func GetDeliveryFee(db *gorm.DB) gin.HandlerFunc {
 
 		var distanceFee, distanceKm float64
 		hasDistance := false
+		var storeCountry string
 
-		if storeIDStr != "" && (customerLat != 0 || customerLng != 0) {
+		if storeIDStr != "" {
 			if storeUUID, err := uuid.Parse(storeIDStr); err == nil {
 				var store models.Store
-				if err := db.Select("lat, lng").First(&store, "id = ?", storeUUID).Error; err == nil && (store.Lat != 0 || store.Lng != 0) {
-					distanceKm = haversineKm(customerLat, customerLng, store.Lat, store.Lng)
-					hasDistance = true
-					if distanceKm > freeKm {
-						distanceFee = (distanceKm - freeKm) * ratePerKm
+				if err := db.Select("lat, lng, country").First(&store, "id = ?", storeUUID).Error; err == nil {
+					storeCountry = store.Country
+					if (store.Lat != 0 || store.Lng != 0) && (customerLat != 0 || customerLng != 0) {
+						distanceKm = haversineKm(customerLat, customerLng, store.Lat, store.Lng)
+						hasDistance = true
+						if distanceKm > freeKm {
+							distanceFee = (distanceKm - freeKm) * ratePerKm
+						}
 					}
 				}
 			}
 		}
 
-		totalFee := math.Round((baseFee+timeFee+distanceFee)*100) / 100
+		subtotal := baseFee + timeFee + distanceFee
+
+		holiday := pricing.ForStore(db, storeCountry, time.Now())
+		var holidayFee float64
+		if holiday.Active {
+			holidayFee = pricing.Round2(subtotal * (holiday.Multiplier - 1))
+		}
+
+		totalFee := pricing.Round2(subtotal + holidayFee)
 
 		parts := []string{fmt.Sprintf("Base: GHS %.2f", baseFee)}
 		if hasDistance {
@@ -616,6 +671,9 @@ func GetDeliveryFee(db *gorm.DB) gin.HandlerFunc {
 		}
 		if timeFee > 0 {
 			parts = append(parts, fmt.Sprintf("%s: GHS %.2f", timeLabel, timeFee))
+		}
+		if holiday.Active {
+			parts = append(parts, fmt.Sprintf("Holiday surcharge +%.0f%% (%s): GHS %.2f", holiday.SurchargePct, holiday.HolidayName, holidayFee))
 		}
 
 		reason := "Standard delivery"
@@ -627,11 +685,21 @@ func GetDeliveryFee(db *gorm.DB) gin.HandlerFunc {
 		case distanceFee > 0:
 			reason = fmt.Sprintf("Distance-based (%.1f km)", math.Round(distanceKm*10)/10)
 		}
+		if holiday.Active {
+			if reason == "Standard delivery" {
+				reason = fmt.Sprintf("Holiday pricing (%s)", holiday.HolidayName)
+			} else {
+				reason = fmt.Sprintf("%s + holiday pricing (%s)", reason, holiday.HolidayName)
+			}
+		}
 
 		resp := gin.H{
-			"fee":       totalFee,
-			"reason":    reason,
-			"breakdown": strings.Join(parts, " | "),
+			"fee":                   totalFee,
+			"reason":                reason,
+			"breakdown":             strings.Join(parts, " | "),
+			"holiday_pricing":       holiday.Active,
+			"holiday_name":          holiday.HolidayName,
+			"holiday_surcharge_pct": holiday.SurchargePct,
 		}
 		if hasDistance {
 			resp["distance_km"] = math.Round(distanceKm*10) / 10

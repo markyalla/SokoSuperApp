@@ -207,6 +207,22 @@ type OrderDelivery struct {
 	UpdatedAt      time.Time
 }
 
+// HolidayPricingSetting is a per-country toggle + percentage for holiday
+// surge pricing, editable from the superadmin panel. One row per country —
+// only "Ghana" exists today, but the country_name/country_code columns let
+// other African markets get their own row (and holiday calendar) later
+// without a schema change.
+type HolidayPricingSetting struct {
+	ID           uuid.UUID `gorm:"type:uuid;primaryKey;default:uuid_generate_v4()" json:"id"`
+	CountryCode  string    `gorm:"size:2;uniqueIndex;not null" json:"country_code"`
+	CountryName  string    `gorm:"size:100;not null" json:"country_name"`
+	SurchargePct float64   `gorm:"type:decimal(5,2);not null;default:0" json:"surcharge_pct"`
+	Enabled      bool      `gorm:"default:false" json:"enabled"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+func (HolidayPricingSetting) TableName() string { return "holiday_pricing_settings" }
+
 // ShopCashoutRequest tracks admin-recorded payouts to store owners
 // for their 80% share of completed product sales.
 type ShopCashoutRequest struct {

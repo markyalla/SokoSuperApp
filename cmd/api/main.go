@@ -41,7 +41,7 @@ func main() {
 
 	// Initialize Task Distributor
 	redisAddr := fmt.Sprintf("%s:%s", os.Getenv("REDIS_HOST"), os.Getenv("REDIS_PORT"))
-	redisOpt := asynq.RedisClientOpt{Addr: redisAddr}
+	redisOpt := asynq.RedisClientOpt{Addr: redisAddr, Password: os.Getenv("REDIS_PASSWORD")}
 	distributor := worker.NewRedisTaskDistributor(redisOpt)
 
 	// Initialize storage
@@ -99,8 +99,19 @@ func main() {
 		&models.Category{}, &models.Store{}, &models.StoreSection{},
 		&models.Product{}, &models.ProductAddon{}, &models.Payment{},
 		&models.Cart{}, &models.CartItem{}, &models.Order{}, &models.OrderItem{}, &models.OrderDelivery{},
-		&models.ShopCashoutRequest{},
+		&models.ShopCashoutRequest{}, &models.HolidayPricingSetting{},
 	)
+
+	// Seed the Ghana holiday-pricing row if it doesn't exist yet. Disabled by
+	// default with a suggested 15% — a revenue-affecting surcharge shouldn't
+	// silently turn itself on; superadmin opts in from the panel.
+	dbs.Shopper.Where("country_code = ?", "GH").
+		FirstOrCreate(&models.HolidayPricingSetting{
+			CountryCode:  "GH",
+			CountryName:  "Ghana",
+			SurchargePct: 15,
+			Enabled:      false,
+		})
 
 	// sokodelivery migration
 	dbs.Delivery.AutoMigrate(
