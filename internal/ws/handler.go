@@ -28,7 +28,7 @@ func Handler(hub *Hub) gin.HandlerFunc {
 			return
 		}
 
-		userID, err := parseToken(tokenStr)
+		userID, roles, err := parseToken(tokenStr)
 		if err != nil {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired token"})
 			return
@@ -40,7 +40,7 @@ func Handler(hub *Hub) gin.HandlerFunc {
 		}
 		defer conn.Close()
 
-		hub.Register(userID, conn)
+		hub.Register(userID, conn, roles)
 		defer hub.Unregister(userID)
 
 		// Read pump: keeps connection alive and detects client disconnect.
@@ -61,7 +61,7 @@ func Handler(hub *Hub) gin.HandlerFunc {
 	}
 }
 
-func parseToken(tokenStr string) (string, error) {
+func parseToken(tokenStr string) (string, []string, error) {
 	secret := os.Getenv("JWT_SECRET")
 	token, err := jwt.Parse(tokenStr, func(t *jwt.Token) (interface{}, error) {
 		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
@@ -70,15 +70,24 @@ func parseToken(tokenStr string) (string, error) {
 		return []byte(secret), nil
 	})
 	if err != nil || !token.Valid {
-		return "", fmt.Errorf("invalid token")
+		return "", nil, fmt.Errorf("invalid token")
 	}
 	claims, ok := token.Claims.(jwt.MapClaims)
 	if !ok {
-		return "", fmt.Errorf("bad claims")
+		return "", nil, fmt.Errorf("bad claims")
 	}
 	sub, ok := claims["sub"].(string)
 	if !ok || sub == "" {
-		return "", fmt.Errorf("missing sub")
+		return "", nil, fmt.Errorf("missing sub")
 	}
-	return sub, nil
+
+	var roles []string
+	if rawRoles, ok := claims["roles"].([]any); ok {
+		for _, r := range rawRoles {
+			if s, ok := r.(string); ok {
+				roles = append(roles, s)
+			}
+		}
+	}
+	return sub, roles, nil
 }

@@ -33,6 +33,7 @@ type RegisterRequest struct {
 	PhoneNumber     string `form:"phone_number"     binding:"required"`
 	DateOfBirth     string `form:"date_of_birth"`
 	Gender          string `form:"gender"`
+	Country         string `form:"country"`
 }
 
 type LoginRequest struct {
@@ -122,6 +123,7 @@ func Register(db *gorm.DB, store *storage.Client, distributor worker.TaskDistrib
 				ProfileImageURL: profileURL,
 				Gender:          userGender,
 				DateOfBirth:     dob,
+				Country:         req.Country,
 			}
 			if err := tx.Create(&user).Error; err != nil {
 				return err

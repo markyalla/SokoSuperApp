@@ -79,6 +79,11 @@ type User struct {
 	Age             int16      `gorm:"->;type:smallint"                                json:"age"`
 	ProfileImageURL string     `gorm:"column:profile_image_url"                        json:"profile_image_url"`
 	PhoneNumber     string     `gorm:"size:20;not null;uniqueIndex"                    json:"phone_number"`
+	// Country the user registered from (the name they picked from the phone
+	// country picker at signup, e.g. "Ghana" — free text, same convention as
+	// Store.Country, not an ISO code). Used to sort stores/products so a
+	// user sees listings from their own country first.
+	Country         string     `gorm:"size:100"                                        json:"country"`
 	Email           string     `gorm:"size:255;not null;uniqueIndex"                   json:"email"`
 	PasswordHash    string     `gorm:"not null"                                        json:"-"` // never serialise password
 	IsEmailVerified bool       `gorm:"default:false"                                   json:"is_email_verified"`

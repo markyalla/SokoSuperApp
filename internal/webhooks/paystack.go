@@ -13,13 +13,14 @@ import (
 	"sokoapp/internal/db"
 	"sokoapp/internal/models"
 	"sokoapp/internal/worker"
+	"sokoapp/internal/ws"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
-func HandlePaystack(dbs *db.Manager, distributor worker.TaskDistributor) gin.HandlerFunc {
+func HandlePaystack(dbs *db.Manager, distributor worker.TaskDistributor, hub *ws.Hub) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// 1. Verify HMAC-SHA512 signature
 		hash := c.GetHeader("x-paystack-signature")
@@ -71,7 +72,7 @@ func HandlePaystack(dbs *db.Manager, distributor worker.TaskDistributor) gin.Han
 				"updated_at":     time.Now(),
 			})
 
-			createAndAssignDelivery(dbs, distributor, order)
+			createAndAssignDelivery(dbs, distributor, hub, order)
 
 		case strings.HasPrefix(ref, "SK-BANK-"):
 			// SokoBank top-up — handled separately
@@ -116,7 +117,7 @@ func HandlePaystack(dbs *db.Manager, distributor worker.TaskDistributor) gin.Han
 // counterpart to SokoWeb's manual "Assign Driver" / "Assign Nearest Driver"
 // admin actions. Paystack can redeliver the same webhook more than once, so
 // this is guarded by checking for an existing assignment on the order first.
-func createAndAssignDelivery(dbs *db.Manager, distributor worker.TaskDistributor, order models.DeliveryOrder) {
+func createAndAssignDelivery(dbs *db.Manager, distributor worker.TaskDistributor, hub *ws.Hub, order models.DeliveryOrder) {
 	var existing models.DeliveryAssignment
 	if err := dbs.Delivery.Where("order_id = ?", order.ID).First(&existing).Error; err == nil {
 		return // already created (e.g. duplicate webhook delivery, or admin beat us to it)
@@ -139,6 +140,15 @@ func createAndAssignDelivery(dbs *db.Manager, distributor worker.TaskDistributor
 		log.Printf("[webhook] failed to create delivery assignment for order %s: %v", order.ID, err)
 		return
 	}
+
+	// Real-time counterpart to SokoWeb's admin "new delivery" toast — same
+	// trigger point (assignment row created, right after payment) it was
+	// already polling for.
+	hub.BroadcastToRoles([]string{"superadmin", "sokodelivery_admin"}, "new_delivery", gin.H{
+		"id":  assignment.ID.String(),
+		"ref": "PD-" + strings.ToUpper(assignment.ID.String()[:8]),
+		"fee": assignment.DeliveryFee,
+	})
 
 	err := distributor.DistributeTaskAssignDriver(context.Background(), &worker.AssignDriverPayload{
 		AssignmentID: assignment.ID.String(),

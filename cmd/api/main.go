@@ -313,7 +313,7 @@ func main() {
 		webhooksGroup := v1.Group("/webhooks")
 		{
 			// Paystack webhook for payment event notifications (POST method)
-			webhooksGroup.POST("/paystack", webhooks.HandlePaystack(dbs, distributor))
+			webhooksGroup.POST("/paystack", webhooks.HandlePaystack(dbs, distributor, hub))
 			// Paystack verification for mobile app redirects (GET method)
 			webhooksGroup.GET("/paystack/verify", shopper.VerifyOrderPayment(dbs.Shopper))
 		}
@@ -324,8 +324,8 @@ func main() {
 		{
 			customerShopper.GET("/categories", shopper.ListCategories(dbs.Shopper))
 			customerShopper.GET("/delivery-fee", shopper.GetDeliveryFee(dbs.Shopper)) // Added for Cart/Checkout
-			customerShopper.GET("/stores", shopper.ListStores(dbs.Shopper))
-			customerShopper.GET("/categories/:id/products", shopper.GetProductsByCategory(dbs.Shopper))
+			customerShopper.GET("/stores", shopper.ListStores(dbs.Shopper, dbs.Account))
+			customerShopper.GET("/categories/:id/products", shopper.GetProductsByCategory(dbs.Shopper, dbs.Account))
 			customerShopper.GET("/stores/:id", shopper.GetStore(dbs.Shopper))
 			customerShopper.GET("/stores/:id/products", shopper.GetProducts(dbs.Shopper))
 			customerShopper.GET("/orders/verify", shopper.VerifyOrderPayment(dbs.Shopper))
@@ -333,7 +333,7 @@ func main() {
 			customerShopper.GET("/orders/:id", shopper.GetOrder(dbs.Shopper, dbs.Account))
 			customerShopper.GET("/orders/:id/tracking", shopper.GetOrderTracking(dbs.Shopper))
 			customerShopper.GET("/orders/:id/otp", shopper.GetOrderOTP(dbs.Shopper))
-			customerShopper.POST("/orders", middleware.RequireApprovedKYC(dbs.Account), shopper.CreateOrder(dbs.Shopper))
+			customerShopper.POST("/orders", middleware.RequireApprovedKYC(dbs.Account), shopper.CreateOrder(dbs.Shopper, hub))
 			customerShopper.PATCH("/orders/:id/cancel", shopper.CancelOrder(dbs.Shopper))
 			customerShopper.DELETE("/orders/:id", shopper.DeleteOrder(dbs.Shopper))
 			customerShopper.POST("/orders/:id/refund", shopper.RefundOrder(dbs.Shopper))
@@ -373,7 +373,7 @@ func main() {
 				driver.POST("/deliveries/:id/otp/generate", delivery.GenerateOTP(dbs.Delivery))
 				driver.POST("/deliveries/:id/otp/verify", delivery.VerifyOTP(dbs.Delivery, dbs.Account))
 				driver.POST("/location", delivery.UpdateLocation(dbs.Delivery, dbs.Shopper, dbs.Account))
-				driver.PUT("/online-status", delivery.ToggleOnlineStatus(dbs.Account))
+				driver.PUT("/online-status", delivery.ToggleOnlineStatus(dbs.Account, hub))
 				driver.POST("/push-token", delivery.RegisterPushToken(dbs.Account))
 				driver.PATCH("/orders/:id/tracking", shopper.UpdateOrderTracking(dbs.Shopper, hub))
 				driver.GET("/earnings", delivery.GetDriverEarnings(dbs.Delivery, dbs.Shopper))

@@ -1067,7 +1067,7 @@ func VerifyOTP(db, accountDB *gorm.DB) gin.HandlerFunc {
 	}
 }
 
-func ToggleOnlineStatus(accountDB *gorm.DB) gin.HandlerFunc {
+func ToggleOnlineStatus(accountDB *gorm.DB, hub *ws.Hub) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		driverID := c.GetString("user_id")
 		driverUUID, err := uuid.Parse(driverID)
@@ -1108,6 +1108,17 @@ func ToggleOnlineStatus(accountDB *gorm.DB) gin.HandlerFunc {
 		status := "offline"
 		if req.IsOnline {
 			status = "online"
+
+			// Real-time counterpart to SokoWeb's "driver just went online"
+			// admin toast — only fires on the offline→online transition, same
+			// as the poller it replaces.
+			var driverUser models.User
+			if err := accountDB.Select("full_name").Where("id = ?", driverUUID).First(&driverUser).Error; err == nil {
+				hub.BroadcastToRoles([]string{"superadmin", "sokodelivery_admin"}, "driver_online", gin.H{
+					"id":   driverID,
+					"name": driverUser.FullName,
+				})
+			}
 		}
 		c.JSON(http.StatusOK, gin.H{"message": "status updated", "status": status})
 	}

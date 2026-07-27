@@ -14,6 +14,7 @@ import (
 	"sokoapp/internal/pricing"
 	"sokoapp/internal/storage"
 	"sokoapp/internal/ws"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -45,7 +46,7 @@ type CreateOrderRequest struct {
 // CreateOrder
 // ─────────────────────────────────────────────
 
-func CreateOrder(db *gorm.DB) gin.HandlerFunc {
+func CreateOrder(db *gorm.DB, hub *ws.Hub) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req CreateOrderRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
@@ -136,6 +137,15 @@ func CreateOrder(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		// Real-time counterpart to SokoWeb's admin "new order" toast — same
+		// trigger point (order row created, before payment) it was already
+		// polling for.
+		hub.BroadcastToRoles([]string{"superadmin", "sokoshopper_admin"}, "new_order", gin.H{
+			"id":     order.ID.String(),
+			"ref":    "FD-" + strings.ToUpper(order.ID.String()[:8]),
+			"amount": order.TotalAmount,
+		})
+
 		c.JSON(http.StatusCreated, gin.H{
 			"order_id":     order.ID.String(),
 			"status":       order.Status,
@@ -198,7 +208,23 @@ func ListCategories(db *gorm.DB) gin.HandlerFunc {
 // ListStores
 // ─────────────────────────────────────────────
 
-func ListStores(db *gorm.DB) gin.HandlerFunc {
+// getUserCountry looks up the requesting user's registered country (empty
+// string if unknown/unset) — used to show them their own country's shops
+// and products first. Never fails the request; a lookup error just means no
+// country-based reordering happens.
+func getUserCountry(accountDB *gorm.DB, userIDStr string) string {
+	userUUID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		return ""
+	}
+	var user models.User
+	if err := accountDB.Select("country").Where("id = ?", userUUID).First(&user).Error; err != nil {
+		return ""
+	}
+	return user.Country
+}
+
+func ListStores(db, accountDB *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		categoryID := c.Query("category_id")
 		stores := []models.Store{}
@@ -211,6 +237,16 @@ func ListStores(db *gorm.DB) gin.HandlerFunc {
 		if err := query.Order("name asc").Find(&stores).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch stores"})
 			return
+		}
+
+		// Move the requester's own country to the front — store creation is
+		// tied to the owner's account country, so this surfaces local shops
+		// first. Stable sort keeps the existing alphabetical order within
+		// each group (own-country / rest).
+		if userCountry := getUserCountry(accountDB, c.GetString("user_id")); userCountry != "" {
+			sort.SliceStable(stores, func(i, j int) bool {
+				return stores[i].Country == userCountry && stores[j].Country != userCountry
+			})
 		}
 
 		for i := range stores {
@@ -326,7 +362,7 @@ func GetProducts(db *gorm.DB) gin.HandlerFunc {
 
 // GetProductsByCategory returns all available products belonging to stores in a given category.
 // Uses two model-based queries instead of a raw JOIN to avoid pgx UUID/enum type binding issues.
-func GetProductsByCategory(db *gorm.DB) gin.HandlerFunc {
+func GetProductsByCategory(db, accountDB *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		categoryUUID, err := uuid.Parse(c.Param("id"))
 		if err != nil {
@@ -363,6 +399,17 @@ func GetProductsByCategory(db *gorm.DB) gin.HandlerFunc {
 		storeMap := make(map[uuid.UUID]models.Store)
 		for _, s := range stores {
 			storeMap[s.ID] = s
+		}
+
+		// Move products from stores in the requester's own country to the
+		// front, same rationale as ListStores. Stable sort keeps the
+		// existing sort_order/created_at ordering within each group.
+		if userCountry := getUserCountry(accountDB, c.GetString("user_id")); userCountry != "" {
+			sort.SliceStable(products, func(i, j int) bool {
+				iMatch := storeMap[products[i].StoreID].Country == userCountry
+				jMatch := storeMap[products[j].StoreID].Country == userCountry
+				return iMatch && !jMatch
+			})
 		}
 
 		// One holiday lookup per distinct country, not per product.
