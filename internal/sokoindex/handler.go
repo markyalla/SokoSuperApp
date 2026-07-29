@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"os"
 	"sokoapp/internal/models"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -254,6 +255,61 @@ func Me(db, accountDB *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+// getUserCountry looks up the requesting user's registered country (empty
+// string if unknown/unset) — mirrors shopper.getUserCountry so artisan
+// browsing surfaces the caller's own country first, same as store browsing.
+// Never fails the request; a lookup error just means no reordering happens.
+func getUserCountry(accountDB *gorm.DB, userIDStr string) string {
+	userUUID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		return ""
+	}
+	var user models.User
+	if err := accountDB.Select("country").Where("id = ?", userUUID).First(&user).Error; err != nil {
+		return ""
+	}
+	return user.Country
+}
+
+// backfillArtisanCountries self-heals ArtisanProfile rows created before the
+// Country column existed: for any artisan in the page missing a country, it
+// looks up that artisan's own account country, fills it in for this
+// request's sort, and persists it so the row never needs re-fetching again.
+func backfillArtisanCountries(db, accountDB *gorm.DB, artisans []models.ArtisanProfile) {
+	var missingUserIDs []uuid.UUID
+	for _, a := range artisans {
+		if a.Country == "" {
+			missingUserIDs = append(missingUserIDs, a.UserID)
+		}
+	}
+	if len(missingUserIDs) == 0 {
+		return
+	}
+
+	var users []models.User
+	if err := accountDB.Select("id, country").Where("id IN ?", missingUserIDs).Find(&users).Error; err != nil {
+		return
+	}
+	countryByUserID := make(map[uuid.UUID]string, len(users))
+	for _, u := range users {
+		if u.Country != "" {
+			countryByUserID[u.ID] = u.Country
+		}
+	}
+
+	for i := range artisans {
+		if artisans[i].Country != "" {
+			continue
+		}
+		country, ok := countryByUserID[artisans[i].UserID]
+		if !ok {
+			continue
+		}
+		artisans[i].Country = country
+		db.Model(&models.ArtisanProfile{}).Where("id = ?", artisans[i].ID).Update("country", country)
+	}
+}
+
 // ─────────────────────────────────────────────
 // ListArtisans — GET /sokoindex/artisans (public)
 // ─────────────────────────────────────────────
@@ -283,14 +339,36 @@ func ListArtisans(db, accountDB *gorm.DB) gin.HandlerFunc {
 			query = query.Where("display_name ILIKE ? OR bio ILIKE ?", "%"+q+"%", "%"+q+"%")
 		}
 
-		var total int64
-		query.Count(&total)
-
-		var artisans []models.ArtisanProfile
-		if err := query.Order("avg_rating desc, recommendation_count desc").Offset(offset).Limit(perPage).Find(&artisans).Error; err != nil {
+		// Country-based reordering (below) needs the full matching set in
+		// memory before paginating — otherwise a same-country artisan sitting
+		// on page 2 could never get bumped ahead of page 1's results, unlike
+		// shopper.ListStores which fetches everything before sorting.
+		var allArtisans []models.ArtisanProfile
+		if err := query.Order("avg_rating desc, recommendation_count desc").Find(&allArtisans).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch artisans"})
 			return
 		}
+		total := int64(len(allArtisans))
+
+		backfillArtisanCountries(db, accountDB, allArtisans)
+
+		// Move the requester's own country to the front — same "your country
+		// first" pattern as shopper.ListStores. Every artisan is still
+		// returned; other countries just end up further down the list.
+		if userCountry := getUserCountry(accountDB, c.GetString("user_id")); userCountry != "" {
+			sort.SliceStable(allArtisans, func(i, j int) bool {
+				return allArtisans[i].Country == userCountry && allArtisans[j].Country != userCountry
+			})
+		}
+
+		end := offset + perPage
+		if offset > len(allArtisans) {
+			offset = len(allArtisans)
+		}
+		if end > len(allArtisans) {
+			end = len(allArtisans)
+		}
+		artisans := allArtisans[offset:end]
 
 		userIDs := make([]uuid.UUID, len(artisans))
 		for i, a := range artisans {

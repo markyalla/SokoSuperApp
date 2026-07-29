@@ -223,17 +223,24 @@ type HolidayPricingSetting struct {
 
 func (HolidayPricingSetting) TableName() string { return "holiday_pricing_settings" }
 
-// ShopCashoutRequest tracks admin-recorded payouts to store owners
-// for their 80% share of completed product sales.
+// ShopCashoutRequest tracks store-owner-initiated payout requests for their
+// 80% share of completed product sales.
 type ShopCashoutRequest struct {
-	ID        uuid.UUID `gorm:"type:uuid;primaryKey;default:uuid_generate_v4()" json:"id"`
-	StoreID   uuid.UUID `gorm:"not null" json:"store_id"`
-	Amount    float64   `gorm:"type:decimal(10,2);not null" json:"amount"`
-	Method    string    `gorm:"size:20" json:"method"`  // momo | bank | cash
-	Status    string    `gorm:"size:20;default:'pending'" json:"status"` // pending | paid | rejected
-	Note      string    `gorm:"type:text" json:"note"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID                uuid.UUID  `gorm:"type:uuid;primaryKey;default:uuid_generate_v4()" json:"id"`
+	StoreID           uuid.UUID  `gorm:"not null" json:"store_id"`
+	OwnerUserID       *uuid.UUID `gorm:"type:uuid" json:"owner_user_id"` // snapshot of Store.OwnerUserID at request time; cross-DB, no FK
+	Amount            float64    `gorm:"type:decimal(10,2);not null" json:"amount"`
+	Method            string     `gorm:"size:20" json:"method"` // momo | bank | cash
+	MomoNumber        string     `gorm:"size:20" json:"momo_number"`
+	BankAccountHolder string     `gorm:"size:150" json:"bank_account_holder"`
+	BankAccountNumber string     `gorm:"size:50" json:"bank_account_number"`
+	BankName          string     `gorm:"size:150" json:"bank_name"`
+	BankBranch        string     `gorm:"size:150" json:"bank_branch"`
+	Status            string     `gorm:"size:20;default:'pending'" json:"status"` // pending | paid | rejected (unused) | needs_correction
+	CorrectionMessage string     `gorm:"type:text" json:"correction_message"`
+	Note              string     `gorm:"type:text" json:"note"` // owner's optional free-text comment only
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
 }
 
 func (Category) TableName() string           { return "categories" }

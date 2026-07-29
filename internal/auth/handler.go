@@ -858,6 +858,7 @@ func buildUserResponse(
 		"full_name":         user.FullName,
 		"phone_number":      user.PhoneNumber,
 		"profile_image_url": getFullImageURL(user.ProfileImageURL),
+		"country":           user.Country,
 		"roles":             roles,
 		"is_driver":         containsRole(roles, string(models.RoleDriver)),
 		"gender":            user.Gender,

@@ -411,8 +411,9 @@ func main() {
 		// SokoIndex Routes (artisan marketplace)
 		sokoIndexGroup := v1.Group("/sokoindex")
 		{
-			// Public browse (no auth)
-			sokoIndexGroup.GET("/artisans", sokoindex.ListArtisans(dbs.SokoIndex, dbs.Account))
+			// Public browse (no auth required) — optional auth still lets a
+			// logged-in caller's own country surface their local artisans first.
+			sokoIndexGroup.GET("/artisans", middleware.OptionalJWTAuthMiddleware(), sokoindex.ListArtisans(dbs.SokoIndex, dbs.Account))
 			sokoIndexGroup.GET("/feature-flags", sokoindex.GetFeatureFlags(dbs.SokoIndex))
 
 			authed := sokoIndexGroup.Group("")

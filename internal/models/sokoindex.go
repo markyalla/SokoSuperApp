@@ -81,6 +81,7 @@ type ArtisanProfile struct {
 	DisplayName          string    `gorm:"size:150;not null"                               json:"display_name"`
 	Bio                  string    `gorm:"type:text"                                       json:"bio"`
 	TradeCategory        string    `gorm:"size:100;not null;index"                         json:"trade_category"`
+	Country              string    `gorm:"size:100;index"                                  json:"country"`
 	LocationText         string    `gorm:"size:255"                                        json:"location_text"`
 	LocationLat          float64   `gorm:"type:decimal(10,7)"                              json:"location_lat"`
 	LocationLng          float64   `gorm:"type:decimal(10,7)"                              json:"location_lng"`

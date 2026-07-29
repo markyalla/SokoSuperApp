@@ -75,3 +75,49 @@ func JWTAuthMiddleware() gin.HandlerFunc {
 		c.Next()
 	}
 }
+
+// OptionalJWTAuthMiddleware behaves like JWTAuthMiddleware but never aborts
+// the request — it best-effort populates "user_id"/"roles" when a valid
+// Bearer token is present, and simply proceeds unauthenticated otherwise.
+// Used on public endpoints that personalize results for logged-in users
+// (e.g. country-based sorting) without requiring login to view them at all.
+func OptionalJWTAuthMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		authHeader := c.GetHeader("Authorization")
+		parts := strings.SplitN(authHeader, " ", 2)
+		if !(len(parts) == 2 && parts[0] == "Bearer") {
+			c.Next()
+			return
+		}
+
+		secret := os.Getenv("JWT_SECRET")
+		token, err := jwt.Parse(parts[1], func(token *jwt.Token) (interface{}, error) {
+			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+			}
+			return []byte(secret), nil
+		})
+		if err != nil || !token.Valid {
+			c.Next()
+			return
+		}
+
+		claims, ok := token.Claims.(jwt.MapClaims)
+		if !ok {
+			c.Next()
+			return
+		}
+
+		if sub, ok := claims["sub"].(string); ok {
+			c.Set("user_id", sub)
+		}
+		rolesRaw, _ := claims["roles"].([]interface{})
+		roles := make([]string, len(rolesRaw))
+		for i, r := range rolesRaw {
+			roles[i] = fmt.Sprint(r)
+		}
+		c.Set("roles", roles)
+
+		c.Next()
+	}
+}
