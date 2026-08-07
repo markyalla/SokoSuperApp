@@ -83,18 +83,24 @@ type User struct {
 	// country picker at signup, e.g. "Ghana" — free text, same convention as
 	// Store.Country, not an ISO code). Used to sort stores/products so a
 	// user sees listings from their own country first.
-	Country         string     `gorm:"size:100"                                        json:"country"`
-	Email           string     `gorm:"size:255;not null;uniqueIndex"                   json:"email"`
-	PasswordHash    string     `gorm:"not null"                                        json:"-"` // never serialise password
-	IsEmailVerified bool       `gorm:"default:false"                                   json:"is_email_verified"`
-	IsPhoneVerified bool       `gorm:"default:false"                                   json:"is_phone_verified"`
-	IsActive        bool       `gorm:"default:true"                                    json:"is_active"`
-	IsDeleted       bool       `gorm:"default:false"                                   json:"-"`
-	FCMToken        string     `gorm:"column:fcm_token"                                json:"-"`
-	ExpoPushToken   string     `gorm:"column:expo_push_token"                          json:"-"`
-	LastLoginAt     *time.Time `                                                       json:"last_login_at"`
-	CreatedAt       time.Time  `                                                       json:"created_at"`
-	UpdatedAt       time.Time  `                                                       json:"updated_at"`
+	Country         string `gorm:"size:100"                                        json:"country"`
+	Email           string `gorm:"size:255;not null;uniqueIndex"                   json:"email"`
+	PasswordHash    string `gorm:"not null"                                        json:"-"` // never serialise password
+	IsEmailVerified bool   `gorm:"default:false"                                   json:"is_email_verified"`
+	IsPhoneVerified bool   `gorm:"default:false"                                   json:"is_phone_verified"`
+	IsActive        bool   `gorm:"default:true"                                    json:"is_active"`
+	IsDeleted       bool   `gorm:"default:false"                                   json:"-"`
+	FCMToken        string `gorm:"column:fcm_token"                                json:"-"`
+	ExpoPushToken   string `gorm:"column:expo_push_token"                          json:"-"`
+	// FailedLoginAttempts / LockedUntil implement the shared login-lockout policy:
+	// after 5 consecutive bad passwords the account locks for 30 minutes, or until
+	// a superadmin clears it early. Enforced independently by both this API and
+	// SokoWeb since they each verify credentials against this same row.
+	FailedLoginAttempts int        `gorm:"default:0"                                  json:"-"`
+	LockedUntil         *time.Time `                                                 json:"-"`
+	LastLoginAt         *time.Time `                                                       json:"last_login_at"`
+	CreatedAt           time.Time  `                                                       json:"created_at"`
+	UpdatedAt           time.Time  `                                                       json:"updated_at"`
 
 	// Relationships
 	Roles         []UserRole     `gorm:"foreignKey:UserID" json:"roles,omitempty"`

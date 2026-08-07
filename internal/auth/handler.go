@@ -193,6 +193,15 @@ func Register(db *gorm.DB, store *storage.Client, distributor worker.TaskDistrib
 // Login
 // ─────────────────────────────────────────────
 
+// maxLoginAttempts / loginLockoutDuration implement the shared account-lockout
+// policy: 5 consecutive bad passwords locks the account for 30 minutes (or
+// until a superadmin clears it early via SokoWeb). Mirrored in SokoWeb's own
+// login handler since both apps verify credentials against the same users row.
+const (
+	maxLoginAttempts     = 5
+	loginLockoutDuration = 30 * time.Minute
+)
+
 func Login(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req LoginRequest
@@ -209,9 +218,40 @@ func Login(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)); err != nil {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid credentials"})
+		if user.LockedUntil != nil && user.LockedUntil.After(time.Now()) {
+			c.JSON(http.StatusLocked, gin.H{
+				"error":        fmt.Sprintf("Account locked due to too many failed login attempts. Try again after %s, use 'Forgot password?' to reset it and regain access immediately, or ask a superadmin to unlock it.", user.LockedUntil.Format(time.Kitchen)),
+				"locked_until": user.LockedUntil,
+			})
 			return
+		}
+
+		if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)); err != nil {
+			attempts := user.FailedLoginAttempts + 1
+			updates := map[string]interface{}{"failed_login_attempts": attempts}
+
+			if attempts >= maxLoginAttempts {
+				lockedUntil := time.Now().Add(loginLockoutDuration)
+				updates["locked_until"] = lockedUntil
+				db.Model(&models.User{}).Where("id = ?", user.ID).Updates(updates)
+				c.JSON(http.StatusLocked, gin.H{
+					"error":        fmt.Sprintf("Account locked due to too many failed login attempts. Try again after %s, use 'Forgot password?' to reset it and regain access immediately, or ask a superadmin to unlock it.", lockedUntil.Format(time.Kitchen)),
+					"locked_until": lockedUntil,
+				})
+				return
+			}
+
+			db.Model(&models.User{}).Where("id = ?", user.ID).Updates(updates)
+			remaining := maxLoginAttempts - attempts
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"error": fmt.Sprintf("Invalid credentials. %d of %d attempts used, %d remaining before your account is locked.", attempts, maxLoginAttempts, remaining),
+			})
+			return
+		}
+
+		if user.FailedLoginAttempts > 0 || user.LockedUntil != nil {
+			db.Model(&models.User{}).Where("id = ?", user.ID).
+				Updates(map[string]interface{}{"failed_login_attempts": 0, "locked_until": nil})
 		}
 
 		// Create KYC row if missing (legacy accounts created before KYC flow).
@@ -390,15 +430,15 @@ func SubmitKYC(db *gorm.DB) gin.HandlerFunc {
 		result := db.Model(&models.KYCSubmission{}).
 			Where("user_id = ?", userID).
 			Updates(map[string]interface{}{
-				"id_type":       models.DocumentType(req.IDType),
-				"id_number":     req.IDNumber,
-				"id_image_url":  req.IDImageURL,
-				"address":       req.Address,
-				"city":          req.City,
-				"country":       req.Country,
-				"status":        models.KYCSubmitted,
-				"submitted_at":  &now,
-				"updated_at":    now,
+				"id_type":      models.DocumentType(req.IDType),
+				"id_number":    req.IDNumber,
+				"id_image_url": req.IDImageURL,
+				"address":      req.Address,
+				"city":         req.City,
+				"country":      req.Country,
+				"status":       models.KYCSubmitted,
+				"submitted_at": &now,
+				"updated_at":   now,
 			})
 
 		if result.Error != nil {
@@ -832,8 +872,16 @@ func ResetPassword(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		// A verified email OTP is stronger proof of ownership than the failed
+		// login attempts that caused a lockout, so a successful reset also
+		// clears it — the user shouldn't have to wait out the lock (or need a
+		// superadmin) after already proving who they are.
 		if err := db.Model(&models.User{}).Where("email = ?", req.Email).
-			Update("password_hash", string(hash)).Error; err != nil {
+			Updates(map[string]interface{}{
+				"password_hash":         string(hash),
+				"failed_login_attempts": 0,
+				"locked_until":          nil,
+			}).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update password"})
 			return
 		}

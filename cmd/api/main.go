@@ -21,6 +21,7 @@ import (
 	"sokoapp/internal/webhooks"
 	"sokoapp/internal/worker"
 	"sokoapp/internal/ws"
+	"strings"
 	"time"
 
 	"github.com/minio/minio-go/v7"
@@ -29,7 +30,31 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/hibiken/asynq"
 	"github.com/joho/godotenv"
+	"github.com/redis/go-redis/v9"
 )
+
+// allowedOrigins builds the CORS allowlist from CORS_ALLOWED_ORIGINS (a comma-
+// separated list of full origins, e.g. "https://admin.sokoapp.com,https://sokoapp.com").
+// Mobile isn't affected either way — native app requests don't carry an Origin
+// header — this only gates browser clients like SokoWeb. Falls back to
+// localhost dev origins if unset; never wildcards to "allow everything".
+func allowedOrigins() map[string]bool {
+	raw := os.Getenv("CORS_ALLOWED_ORIGINS")
+	origins := map[string]bool{}
+	if raw == "" {
+		log.Println("Warning: CORS_ALLOWED_ORIGINS not set — allowing only localhost dev origins. Set it to your SokoWeb domain(s) in production, e.g. CORS_ALLOWED_ORIGINS=https://admin.sokoapp.com")
+		for _, o := range []string{"http://localhost:5000", "http://127.0.0.1:5000"} {
+			origins[o] = true
+		}
+		return origins
+	}
+	for _, o := range strings.Split(raw, ",") {
+		if o = strings.TrimSpace(o); o != "" {
+			origins[o] = true
+		}
+	}
+	return origins
+}
 
 func main() {
 	if err := godotenv.Load(); err != nil {
@@ -43,6 +68,13 @@ func main() {
 	redisAddr := fmt.Sprintf("%s:%s", os.Getenv("REDIS_HOST"), os.Getenv("REDIS_PORT"))
 	redisOpt := asynq.RedisClientOpt{Addr: redisAddr, Password: os.Getenv("REDIS_PASSWORD")}
 	distributor := worker.NewRedisTaskDistributor(redisOpt)
+
+	// Shared Redis client for lightweight per-IP rate limiting (separate from
+	// the asynq task-queue client above).
+	rateLimitRedis := redis.NewClient(&redis.Options{
+		Addr:     redisAddr,
+		Password: os.Getenv("REDIS_PASSWORD"),
+	})
 
 	// Initialize storage
 	store := storage.NewClient()
@@ -234,18 +266,20 @@ func main() {
 		c.Next()
 	})
 
-	// Core Middleware: CORS for web app (Flask) access
+	// Core Middleware: CORS for browser clients (SokoWeb). The API is pure
+	// Bearer-JWT with no cookie auth, so AllowCredentials isn't needed — every
+	// browser call already sets Authorization explicitly. Origins are checked
+	// against an explicit allowlist (see allowedOrigins above) rather than
+	// accepting every origin.
+	originAllowlist := allowedOrigins()
 	r.Use(cors.New(cors.Config{
 		AllowOriginFunc: func(origin string) bool {
-			// Allow all origins in development, but avoid the "*" wildcard
-			// which conflicts with AllowCredentials: true
-			return true
+			return originAllowlist[origin]
 		},
-		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization"},
-		ExposeHeaders:    []string{"Content-Length"},
-		AllowCredentials: true,
-		MaxAge:           12 * time.Hour,
+		AllowMethods:  []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+		AllowHeaders:  []string{"Origin", "Content-Type", "Accept", "Authorization"},
+		ExposeHeaders: []string{"Content-Length"},
+		MaxAge:        12 * time.Hour,
 	}))
 
 	// Health check endpoint (as mentioned in README)
@@ -259,13 +293,17 @@ func main() {
 	v1 := r.Group("/api/v1")
 	{
 		// Auth Routes
-		v1.POST("/auth/register", auth.Register(dbs.Account, store, distributor))
-		v1.POST("/auth/login", auth.Login(dbs.Account))
+		// Login/register/forgot-password are throttled per-IP (10 req/min) as a
+		// coarse defense-in-depth layer against scripted brute force, on top of
+		// the per-account lockout enforced inside auth.Login itself.
+		authRateLimit := middleware.RateLimit(rateLimitRedis, "auth", 10, time.Minute)
+		v1.POST("/auth/register", authRateLimit, auth.Register(dbs.Account, store, distributor))
+		v1.POST("/auth/login", authRateLimit, auth.Login(dbs.Account))
 		v1.POST("/auth/refresh", auth.Refresh(dbs.Account))
 		v1.POST("/auth/logout", auth.Logout(dbs.Account))
 		v1.GET("/auth/me", middleware.JWTAuthMiddleware(), auth.Me(dbs.Account))
 		v1.PATCH("/auth/me", middleware.JWTAuthMiddleware(), auth.UpdateMe(dbs.Account))
-		v1.POST("/auth/forgot-password", auth.ForgotPassword(dbs.Account))
+		v1.POST("/auth/forgot-password", authRateLimit, auth.ForgotPassword(dbs.Account))
 		v1.POST("/auth/verify-otp", auth.VerifyOTP(dbs.Account))
 		v1.POST("/auth/reset-password", auth.ResetPassword(dbs.Account))
 		v1.GET("/health", func(c *gin.Context) {
