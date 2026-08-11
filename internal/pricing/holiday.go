@@ -43,17 +43,39 @@ type Status struct {
 // resolves to: today's price, unchanged.
 var inactive = Status{Active: false, Multiplier: 1.0}
 
+// ghanaHolidayOn returns the fixed-date Ghana holiday name for the given
+// date and whether the store's country qualifies at all. Pure — no DB — so
+// the date/country matching rules can be unit tested directly.
+func ghanaHolidayOn(storeCountry string, at time.Time) (name string, isHoliday bool) {
+	if !strings.EqualFold(strings.TrimSpace(storeCountry), "Ghana") {
+		return "", false
+	}
+	name, isHoliday = ghanaFixedHolidays[[2]int{int(at.Month()), at.Day()}]
+	return name, isHoliday
+}
+
+// statusFromSurcharge builds the Status a given surcharge percentage
+// produces for a named holiday. A percentage of zero or less always means
+// no surcharge, regardless of the row existing in the settings table.
+func statusFromSurcharge(holidayName string, surchargePct float64) Status {
+	if surchargePct <= 0 {
+		return inactive
+	}
+	return Status{
+		Active:       true,
+		Multiplier:   1 + surchargePct/100.0,
+		SurchargePct: surchargePct,
+		HolidayName:  holidayName,
+	}
+}
+
 // ForStore returns the current holiday pricing status for a store, given its
 // country string (Store.Country — free text like "Ghana", not an ISO code)
 // and the time to evaluate. It looks up the configurable surcharge percentage
 // from the holiday_pricing_settings table, seeded/edited from the superadmin
 // panel — a missing or disabled row means no surcharge even on a holiday.
 func ForStore(db *gorm.DB, storeCountry string, at time.Time) Status {
-	if !strings.EqualFold(strings.TrimSpace(storeCountry), "Ghana") {
-		return inactive
-	}
-
-	holidayName, isHoliday := ghanaFixedHolidays[[2]int{int(at.Month()), at.Day()}]
+	holidayName, isHoliday := ghanaHolidayOn(storeCountry, at)
 	if !isHoliday {
 		return inactive
 	}
@@ -61,16 +83,11 @@ func ForStore(db *gorm.DB, storeCountry string, at time.Time) Status {
 	var setting models.HolidayPricingSetting
 	err := db.Where("enabled = ? AND lower(country_name) = ?", true, "ghana").
 		First(&setting).Error
-	if err != nil || setting.SurchargePct <= 0 {
+	if err != nil {
 		return inactive
 	}
 
-	return Status{
-		Active:       true,
-		Multiplier:   1 + setting.SurchargePct/100.0,
-		SurchargePct: setting.SurchargePct,
-		HolidayName:  holidayName,
-	}
+	return statusFromSurcharge(holidayName, setting.SurchargePct)
 }
 
 // Round2 rounds to 2 decimal places — every GHS amount in this codebase is

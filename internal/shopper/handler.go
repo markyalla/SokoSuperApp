@@ -657,32 +657,13 @@ func GetOrder(db, accountDB *gorm.DB) gin.HandlerFunc {
 
 func GetDeliveryFee(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		const (
-			baseFee          = 15.0
-			freeKm           = 3.0
-			ratePerKm        = 2.0
-			eveningSurcharge = 3.0
-			nightSurcharge   = 7.0
-		)
-
 		hour := time.Now().UTC().Hour()
-
-		var timeFee float64
-		var timeLabel string
-		switch {
-		case hour >= 22 || hour < 6:
-			timeFee = nightSurcharge
-			timeLabel = "Night surcharge (10PM–6AM)"
-		case hour >= 18:
-			timeFee = eveningSurcharge
-			timeLabel = "Late evening surcharge (6PM–10PM)"
-		}
 
 		customerLat, _ := strconv.ParseFloat(c.Query("lat"), 64)
 		customerLng, _ := strconv.ParseFloat(c.Query("lng"), 64)
 		storeIDStr := c.Query("store_id")
 
-		var distanceFee, distanceKm float64
+		var distanceKm float64
 		hasDistance := false
 		var storeCountry string
 
@@ -694,75 +675,27 @@ func GetDeliveryFee(db *gorm.DB) gin.HandlerFunc {
 					if (store.Lat != 0 || store.Lng != 0) && (customerLat != 0 || customerLng != 0) {
 						distanceKm = haversineKm(customerLat, customerLng, store.Lat, store.Lng)
 						hasDistance = true
-						if distanceKm > freeKm {
-							distanceFee = (distanceKm - freeKm) * ratePerKm
-						}
 					}
 				}
 			}
 		}
 
-		subtotal := baseFee + timeFee + distanceFee
-
 		holiday := pricing.ForStore(db, storeCountry, time.Now())
-		var holidayFee float64
-		if holiday.Active {
-			holidayFee = pricing.Round2(subtotal * (holiday.Multiplier - 1))
-		}
-
-		totalFee := pricing.Round2(subtotal + holidayFee)
-
-		parts := []string{fmt.Sprintf("Base: GHS %.2f", baseFee)}
-		if hasDistance {
-			parts = append(parts, fmt.Sprintf("Distance (%.1f km): GHS %.2f", distanceKm, distanceFee))
-		}
-		if timeFee > 0 {
-			parts = append(parts, fmt.Sprintf("%s: GHS %.2f", timeLabel, timeFee))
-		}
-		if holiday.Active {
-			parts = append(parts, fmt.Sprintf("Holiday surcharge +%.0f%% (%s): GHS %.2f", holiday.SurchargePct, holiday.HolidayName, holidayFee))
-		}
-
-		reason := "Standard delivery"
-		switch {
-		case timeFee > 0 && distanceFee > 0:
-			reason = fmt.Sprintf("%.1f km away + %s", math.Round(distanceKm*10)/10, strings.ToLower(timeLabel))
-		case timeFee > 0:
-			reason = timeLabel
-		case distanceFee > 0:
-			reason = fmt.Sprintf("Distance-based (%.1f km)", math.Round(distanceKm*10)/10)
-		}
-		if holiday.Active {
-			if reason == "Standard delivery" {
-				reason = fmt.Sprintf("Holiday pricing (%s)", holiday.HolidayName)
-			} else {
-				reason = fmt.Sprintf("%s + holiday pricing (%s)", reason, holiday.HolidayName)
-			}
-		}
+		result := computeDeliveryFee(hour, distanceKm, hasDistance, holiday)
 
 		resp := gin.H{
-			"fee":                   totalFee,
-			"reason":                reason,
-			"breakdown":             strings.Join(parts, " | "),
+			"fee":                   result.Fee,
+			"reason":                result.Reason,
+			"breakdown":             result.Breakdown,
 			"holiday_pricing":       holiday.Active,
 			"holiday_name":          holiday.HolidayName,
 			"holiday_surcharge_pct": holiday.SurchargePct,
 		}
 		if hasDistance {
-			resp["distance_km"] = math.Round(distanceKm*10) / 10
+			resp["distance_km"] = result.DistanceKm
 		}
 		c.JSON(http.StatusOK, resp)
 	}
-}
-
-func haversineKm(lat1, lng1, lat2, lng2 float64) float64 {
-	const R = 6371.0
-	dLat := (lat2 - lat1) * math.Pi / 180.0
-	dLng := (lng2 - lng1) * math.Pi / 180.0
-	a := math.Sin(dLat/2)*math.Sin(dLat/2) +
-		math.Cos(lat1*math.Pi/180.0)*math.Cos(lat2*math.Pi/180.0)*
-			math.Sin(dLng/2)*math.Sin(dLng/2)
-	return R * 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
 }
 
 // ─────────────────────────────────────────────
