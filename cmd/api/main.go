@@ -246,6 +246,10 @@ func main() {
 	// without ever telling the backend they're no longer online.
 	worker.StartPickupTimeoutWatcher(dbs.Shopper, dbs.Delivery, dbs.Account)
 
+	// Flags (does not touch) shopper orders stuck in payment_pending for
+	// over 20 minutes — surfaced on the Audit Log page for a human to check.
+	worker.StartStuckOrderWatcher(dbs.Shopper, dbs.Account)
+
 	// WebSocket hub — manages all live mobile connections
 	hub := ws.NewHub()
 	hub.StartPingWorker()
@@ -259,6 +263,12 @@ func main() {
 	// Explicitly set trusted proxies to nil to clear the warning log.
 	// This is generally safe for local development where you expect direct connections.
 	_ = r.SetTrustedProxies(nil)
+
+	// Audit log: records every mutating admin-role request and every 5xx/panic
+	// to the shared audit_logs table, read by SokoWeb's Audit Log admin page.
+	// Registered right after gin.Default() (which adds Recovery first) so a
+	// panic is logged here and still handled by Gin's own Recovery after.
+	r.Use(middleware.AuditRequests(dbs.Account))
 
 	// Debug Middleware: Log incoming request IPs for better visibility
 	r.Use(func(c *gin.Context) {

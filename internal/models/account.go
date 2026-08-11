@@ -219,18 +219,35 @@ type RefreshToken struct {
 }
 
 // ─── AUDIT LOGS ──────────────────────────────────────────────────────────────
+//
+// One table, shared across sokoApp (Go) and SokoWeb (Flask) — both write to
+// it directly against the same sokoaccount database, so a single admin page
+// in SokoWeb can show activity/failures from either service without needing
+// a cross-service API call. Category distinguishes "who did what" entries
+// (admin_action) from system-detected problems (payment_failure, order_stuck,
+// job_failure, api_error) so one table can serve as both an accountability
+// trail and a failure feed.
 
 type AuditLog struct {
-	ID         int64      `gorm:"primaryKey"       json:"id"`
-	UserID     *uuid.UUID `gorm:"type:uuid"        json:"user_id,omitempty"`
-	Action     string     `gorm:"size:100;not null" json:"action"`
-	EntityType string     `gorm:"size:100"          json:"entity_type"`
-	EntityID   *uuid.UUID `gorm:"type:uuid"         json:"entity_id,omitempty"`
-	OldValue   string     `gorm:"type:jsonb"        json:"-"`
-	NewValue   string     `gorm:"type:jsonb"        json:"-"`
-	IPAddress  string     `gorm:"type:inet"         json:"-"`
-	UserAgent  string     `                         json:"-"`
-	CreatedAt  time.Time  `gorm:"default:now()"     json:"created_at"`
+	ID          int64      `gorm:"primaryKey"              json:"id"`
+	Category    string     `gorm:"size:30;not null;index"  json:"category"` // admin_action | payment_failure | order_stuck | job_failure | api_error
+	Severity    string     `gorm:"size:20;not null;index"  json:"severity"` // info | warning | error | critical
+	UserID      *uuid.UUID `gorm:"type:uuid;index"         json:"user_id,omitempty"`
+	ActorLabel  string     `gorm:"size:150"                json:"actor_label,omitempty"` // "system" for automated events, else a display name/role cached at write time
+	Action      string     `gorm:"size:100;not null"       json:"action"`
+	EntityType  string     `gorm:"size:100"                json:"entity_type,omitempty"`
+	EntityID    *uuid.UUID `gorm:"type:uuid;index"         json:"entity_id,omitempty"`
+	Message     string     `gorm:"type:text"               json:"message,omitempty"`
+	// Pointers, not plain strings: an empty Go string is not valid JSON, so
+	// writing "" into a jsonb column errors — nil correctly becomes SQL NULL.
+	OldValue    *string    `gorm:"type:jsonb"              json:"old_value,omitempty"`
+	NewValue    *string    `gorm:"type:jsonb"              json:"new_value,omitempty"`
+	Metadata    *string    `gorm:"type:jsonb"              json:"metadata,omitempty"`
+	RequestPath string     `gorm:"size:255"                json:"request_path,omitempty"`
+	StatusCode  int        `                               json:"status_code,omitempty"`
+	IPAddress   string     `gorm:"type:inet"               json:"ip_address,omitempty"`
+	UserAgent   string     `                               json:"user_agent,omitempty"`
+	CreatedAt   time.Time  `gorm:"default:now();index"     json:"created_at"`
 }
 
 func (User) TableName() string            { return "users" }

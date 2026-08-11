@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"sokoapp/internal/audit"
 	"sokoapp/internal/db"
 	"sokoapp/internal/models"
 	"time"
@@ -30,6 +31,30 @@ func NewRedisTaskProcessor(redisOpt asynq.RedisClientOpt, dbs *db.Manager) TaskP
 			"critical": 6,
 			"default":  3,
 		},
+		// Previously these errors only went to stdout — invisible once a
+		// container's logs roll over. Every failed attempt is logged as a
+		// warning (it'll retry); once retries are exhausted it's logged
+		// again as critical, since at that point the job silently never ran.
+		ErrorHandler: asynq.ErrorHandlerFunc(func(ctx context.Context, task *asynq.Task, err error) {
+			retried, _ := asynq.GetRetryCount(ctx)
+			maxRetry, _ := asynq.GetMaxRetry(ctx)
+			exhausted := retried >= maxRetry
+
+			severity := audit.SeverityWarning
+			verb := "failed, will retry"
+			if exhausted {
+				severity = audit.SeverityCritical
+				verb = "failed, retries exhausted — job will not run again"
+			}
+
+			audit.Log(dbs.Account, audit.Entry{
+				Category: audit.CategoryJobFailure,
+				Severity: severity,
+				Action:   fmt.Sprintf("job_failed:%s", task.Type()),
+				Message:  fmt.Sprintf("Background job %s %s (attempt %d/%d): %v", task.Type(), verb, retried+1, maxRetry+1, err),
+				Metadata: map[string]any{"payload": string(task.Payload())},
+			})
+		}),
 	})
 
 	return &RedisTaskProcessor{
