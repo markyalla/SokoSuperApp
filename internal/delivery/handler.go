@@ -664,6 +664,8 @@ func initiatePaystack(email, reference string, amountGHS float64) (string, error
 		"amount":    int(amountGHS * 100), // GHS → pesewas
 		"reference": reference,
 		"currency":  "GHS",
+		// Offer both — Paystack only shows channels that are also enabled on the account.
+		"channels":  []string{"card", "mobile_money"},
 	})
 
 	req, _ := http.NewRequest("POST", "https://api.paystack.co/transaction/initialize", bytes.NewBuffer(body))

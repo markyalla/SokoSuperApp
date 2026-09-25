@@ -155,6 +155,8 @@ func InitializePayment(db, accountDB *gorm.DB) gin.HandlerFunc {
 			"amount":    amountPesewas,
 			"reference": reference,
 			"currency":  "GHS",
+			// Offer both — Paystack only shows channels that are also enabled on the account.
+			"channels":  []string{"card", "mobile_money"},
 		})
 
 		psReq, _ := http.NewRequest("POST", "https://api.paystack.co/transaction/initialize", bytes.NewBuffer(payload))
