@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"sokoapp/internal/models"
 	"strconv"
@@ -219,7 +220,7 @@ func VerifyPayment(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		paystackSecret := os.Getenv("PAYSTACK_SECRET_KEY")
-		psReq, _ := http.NewRequest("GET", "https://api.paystack.co/transaction/verify/"+reference, nil)
+		psReq, _ := http.NewRequest("GET", "https://api.paystack.co/transaction/verify/"+url.PathEscape(reference), nil)
 		psReq.Header.Set("Authorization", "Bearer "+paystackSecret)
 
 		client := &http.Client{Timeout: 10 * time.Second}

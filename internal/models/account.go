@@ -201,6 +201,7 @@ type OTPVerification struct {
 	OTPHash    string     `gorm:"column:otp_hash;not null"                        json:"-"`
 	Purpose    string     `gorm:"size:50;not null"                                json:"purpose"`
 	IsUsed     bool       `gorm:"default:false"                                   json:"is_used"`
+	Attempts   int        `gorm:"default:0"                                       json:"-"` // wrong guesses
 	ExpiresAt  time.Time  `gorm:"not null"                                        json:"expires_at"`
 	CreatedAt  time.Time  `gorm:"default:now()"                                   json:"created_at"`
 }

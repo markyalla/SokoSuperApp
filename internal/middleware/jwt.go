@@ -56,6 +56,11 @@ func JWTAuthMiddleware() gin.HandlerFunc {
 			return
 		}
 
+		if !isUserActive(sub) {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "This account is no longer active"})
+			return
+		}
+
 		// Extract roles. In jwt-go MapClaims, slices are usually parsed as []interface{}.
 		rolesRaw, ok := claims["roles"].([]interface{})
 		if !ok {
@@ -108,9 +113,12 @@ func OptionalJWTAuthMiddleware() gin.HandlerFunc {
 			return
 		}
 
-		if sub, ok := claims["sub"].(string); ok {
-			c.Set("user_id", sub)
+		sub, ok := claims["sub"].(string)
+		if !ok || !isUserActive(sub) {
+			c.Next()
+			return
 		}
+		c.Set("user_id", sub)
 		rolesRaw, _ := claims["roles"].([]interface{})
 		roles := make([]string, len(rolesRaw))
 		for i, r := range rolesRaw {

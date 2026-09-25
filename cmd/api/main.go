@@ -61,8 +61,22 @@ func main() {
 		log.Println("Warning: .env file not found")
 	}
 
+	// An empty JWT_SECRET would make every token signed with an empty key —
+	// anyone could mint an admin token. Refuse to start instead.
+	if secret := os.Getenv("JWT_SECRET"); secret == "" {
+		log.Fatal("Critical: JWT_SECRET is not set")
+	} else if len(secret) < 32 {
+		log.Println("Warning: JWT_SECRET is shorter than 32 characters — use a long random value in production")
+	}
+	if os.Getenv("PAYSTACK_SECRET_KEY") == "" {
+		log.Println("Warning: PAYSTACK_SECRET_KEY is not set — payments and the Paystack webhook will not work")
+	}
+
 	// 1. Initialize all 6 DB connections
 	dbs := db.NewManager()
+
+	// Lets the auth middleware reject tokens of deleted/deactivated accounts.
+	middleware.SetAccountDB(dbs.Account)
 
 	// Initialize Task Distributor
 	redisAddr := fmt.Sprintf("%s:%s", os.Getenv("REDIS_HOST"), os.Getenv("REDIS_PORT"))
@@ -260,9 +274,31 @@ func main() {
 
 	r := gin.Default()
 
-	// Explicitly set trusted proxies to nil to clear the warning log.
-	// This is generally safe for local development where you expect direct connections.
-	_ = r.SetTrustedProxies(nil)
+	// The API runs behind Caddy, so the TCP peer is the proxy, not the user.
+	// Trusting the local/Docker proxy addresses makes c.ClientIP() read the
+	// real client from X-Forwarded-For — otherwise every user shares one IP
+	// and the per-IP rate limits become a single global limit (one attacker
+	// could lock everyone out of login). Override with TRUSTED_PROXIES.
+	trusted := []string{"127.0.0.1", "::1", "172.16.0.0/12"}
+	if raw := os.Getenv("TRUSTED_PROXIES"); raw != "" {
+		trusted = nil
+		for _, p := range strings.Split(raw, ",") {
+			if p = strings.TrimSpace(p); p != "" {
+				trusted = append(trusted, p)
+			}
+		}
+	}
+	if err := r.SetTrustedProxies(trusted); err != nil {
+		log.Fatalf("Critical: invalid TRUSTED_PROXIES: %v", err)
+	}
+
+	// Baseline security headers on every API response (media included).
+	r.Use(func(c *gin.Context) {
+		c.Header("X-Content-Type-Options", "nosniff")
+		c.Header("X-Frame-Options", "DENY")
+		c.Header("Referrer-Policy", "no-referrer")
+		c.Next()
+	})
 
 	// Audit log: records every mutating admin-role request and every 5xx/panic
 	// to the shared audit_logs table, read by SokoWeb's Audit Log admin page.
@@ -309,13 +345,18 @@ func main() {
 		authRateLimit := middleware.RateLimit(rateLimitRedis, "auth", 10, time.Minute)
 		v1.POST("/auth/register", authRateLimit, auth.Register(dbs.Account, store, distributor))
 		v1.POST("/auth/login", authRateLimit, auth.Login(dbs.Account))
-		v1.POST("/auth/refresh", auth.Refresh(dbs.Account))
+		// verify-otp/reset-password also have per-OTP attempt caps inside the
+		// handlers; these per-IP limits stop spraying across many accounts.
+		otpRateLimit := middleware.RateLimit(rateLimitRedis, "otp", 10, time.Minute)
+		refreshRateLimit := middleware.RateLimit(rateLimitRedis, "refresh", 30, time.Minute)
+		v1.POST("/auth/refresh", refreshRateLimit, auth.Refresh(dbs.Account))
 		v1.POST("/auth/logout", auth.Logout(dbs.Account))
 		v1.GET("/auth/me", middleware.JWTAuthMiddleware(), auth.Me(dbs.Account))
 		v1.PATCH("/auth/me", middleware.JWTAuthMiddleware(), auth.UpdateMe(dbs.Account))
+		v1.DELETE("/auth/me", authRateLimit, middleware.JWTAuthMiddleware(), auth.DeleteAccount(dbs.Account, store))
 		v1.POST("/auth/forgot-password", authRateLimit, auth.ForgotPassword(dbs.Account))
-		v1.POST("/auth/verify-otp", auth.VerifyOTP(dbs.Account))
-		v1.POST("/auth/reset-password", auth.ResetPassword(dbs.Account))
+		v1.POST("/auth/verify-otp", otpRateLimit, auth.VerifyOTP(dbs.Account))
+		v1.POST("/auth/reset-password", otpRateLimit, auth.ResetPassword(dbs.Account))
 		v1.GET("/health", func(c *gin.Context) {
 			utils.SendSuccess(c, http.StatusOK, "Service is running", gin.H{"status": "UP"})
 		})
@@ -323,10 +364,21 @@ func main() {
 		// Media Routes
 		mediaGroup := v1.Group("/media")
 		{
-			mediaGroup.POST("/upload", middleware.JWTAuthMiddleware(), shopper.UploadMedia(store))
-			mediaGroup.GET("/serve/:bucket/*filename", func(c *gin.Context) {
+			uploadRateLimit := middleware.RateLimit(rateLimitRedis, "upload", 30, time.Minute)
+			mediaGroup.POST("/upload", uploadRateLimit, middleware.JWTAuthMiddleware(), shopper.UploadMedia(store))
+			mediaGroup.GET("/serve/:bucket/*filename", middleware.OptionalJWTAuthMiddleware(), func(c *gin.Context) {
 				bucket := c.Param("bucket")
 				filename := c.Param("filename")
+
+				// Identity documents are never public: staff only (SokoWeb
+				// fetches them server-side with the admin's token).
+				if storage.PrivateBuckets[bucket] {
+					if c.GetString("user_id") == "" || !middleware.IsStaff(c) {
+						c.JSON(http.StatusNotFound, gin.H{"error": "Image not found"})
+						return
+					}
+					c.Header("Cache-Control", "private, no-store")
+				}
 				// Strip leading slash from filename to prevent double slashes in the redirect URL
 				if len(filename) > 0 && filename[0] == '/' {
 					filename = filename[1:]

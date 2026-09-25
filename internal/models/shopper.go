@@ -196,6 +196,7 @@ type OrderDelivery struct {
 	DriverID    *uuid.UUID `gorm:"type:uuid"`
 	Status      string     `gorm:"type:varchar(50);default:'pending'"`
 	OTP            string     `gorm:"size:6"`
+	OTPAttempts    int        `gorm:"default:0"` // wrong handover-code guesses since last generate
 	CurrentLat     float64    `gorm:"type:decimal(10,8)"`
 	CurrentLng     float64    `gorm:"type:decimal(11,8)"`
 	CustomerRating int16      `gorm:"default:0"`

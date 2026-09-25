@@ -89,6 +89,7 @@ type DeliveryAssignment struct {
 	DriverEarnings   float64 `gorm:"type:decimal(10,2);not null;default:0.00"`
 	PlatformCut      float64 `gorm:"type:decimal(10,2);not null;default:0.00"`
 	DeliveryPin      string  `gorm:"size:6"`
+	PinAttempts      int     `gorm:"default:0"` // wrong handover-code guesses since last generate
 	DeliveryPhotoURL string  `gorm:"column:delivery_photo_url"`
 	IsExpress        bool    `gorm:"default:false"`
 	IsFragile        bool    `gorm:"default:false"`

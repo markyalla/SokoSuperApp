@@ -2,17 +2,21 @@ package shopper
 
 import (
 	"bytes"
+	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"math"
 	"net/http"
+	"net/url"
 	"os"
-	"path/filepath"
+	"sokoapp/internal/middleware"
 	"sokoapp/internal/models"
 	"sokoapp/internal/pricing"
 	"sokoapp/internal/storage"
+	"sokoapp/internal/utils"
 	"sokoapp/internal/ws"
 	"sort"
 	"strconv"
@@ -28,7 +32,7 @@ type ProductItemRequest struct {
 	ProductID   string  `json:"product_id" binding:"required,uuid"`
 	Name        string  `json:"name" binding:"required"`
 	Quantity    int16   `json:"quantity" binding:"required,gt=0"`
-	UnitPrice   float64 `json:"unit_price" binding:"required,gt=0"`
+	UnitPrice   float64 `json:"unit_price"` // ignored: price comes from the product row
 	SpecialNote string  `json:"special_note"`
 }
 
@@ -72,15 +76,48 @@ func CreateOrder(db *gorm.DB, hub *ws.Hub) gin.HandlerFunc {
 			return
 		}
 
-		deliveryFee := req.DeliveryFee
-		if deliveryFee <= 0 {
-			deliveryFee = 3.5
+		// Prices and the delivery fee are always computed here from the
+		// database. The request's unit_price / delivery_fee fields are kept for
+		// backward compatibility with older app builds but are ignored — a
+		// modified client could otherwise set its own prices.
+		var store models.Store
+		if err := db.Select("id").Where("id = ?", storeUUID).First(&store).Error; err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Store not found"})
+			return
 		}
 
+		type pricedItem struct {
+			product  models.Product
+			quantity int16
+			note     string
+		}
+		priced := make([]pricedItem, 0, len(req.Items))
 		subtotal := 0.0
 		for _, item := range req.Items {
-			subtotal += float64(item.Quantity) * item.UnitPrice
+			if item.Quantity < 1 || item.Quantity > 100 {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid item quantity"})
+				return
+			}
+			productUUID, err := uuid.Parse(item.ProductID)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid product id"})
+				return
+			}
+			var product models.Product
+			if err := db.Where("id = ? AND store_id = ?", productUUID, storeUUID).First(&product).Error; err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "One of the items is not sold by this store"})
+				return
+			}
+			if !product.IsAvailable {
+				c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("%s is currently unavailable", product.Name)})
+				return
+			}
+			subtotal += float64(item.Quantity) * product.BasePrice
+			priced = append(priced, pricedItem{product: product, quantity: item.Quantity, note: item.SpecialNote})
 		}
+		subtotal = math.Round(subtotal*100) / 100
+
+		deliveryFee := quoteDeliveryFee(db, storeUUID, req.Lat, req.Lng).result.Fee
 
 		total := subtotal + deliveryFee
 		order := models.Order{
@@ -104,26 +141,15 @@ func CreateOrder(db *gorm.DB, hub *ws.Hub) gin.HandlerFunc {
 			if err := tx.Create(&order).Error; err != nil {
 				return err
 			}
-			for _, item := range req.Items {
-				productUUID, err := uuid.Parse(item.ProductID)
-				if err != nil {
-					return err
-				}
-				// Fetch product to get ImageURL
-				var product models.Product
-				if err := tx.Where("id = ?", productUUID).First(&product).Error; err != nil {
-					// If product not found, or error, log it and proceed without image URL
-					return err // Or handle this error more gracefully, e.g., assign a default image URL
-				}
-
+			for _, item := range priced {
 				orderItem := models.OrderItem{
 					OrderID:     order.ID,
-					ProductID:   productUUID,
-					Name:        item.Name,
-					Quantity:    item.Quantity,
-					UnitPrice:   item.UnitPrice,
-					SpecialNote: item.SpecialNote,
-					ImageURL:    product.ImageURL, // Assign ImageURL from product
+					ProductID:   item.product.ID,
+					Name:        item.product.Name,
+					Quantity:    item.quantity,
+					UnitPrice:   item.product.BasePrice,
+					SpecialNote: item.note,
+					ImageURL:    item.product.ImageURL,
 				}
 				if err := tx.Create(&orderItem).Error; err != nil {
 					return err
@@ -655,44 +681,55 @@ func GetOrder(db, accountDB *gorm.DB) gin.HandlerFunc {
 // Night 22:00–05:59 UTC: +GHS 7
 // ─────────────────────────────────────────────
 
-func GetDeliveryFee(db *gorm.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		hour := time.Now().UTC().Hour()
+type deliveryFeeQuote struct {
+	result      deliveryFeeBreakdown
+	holiday     pricing.Status
+	hasDistance bool
+}
 
-		customerLat, _ := strconv.ParseFloat(c.Query("lat"), 64)
-		customerLng, _ := strconv.ParseFloat(c.Query("lng"), 64)
-		storeIDStr := c.Query("store_id")
+// quoteDeliveryFee is the single source of truth for the delivery fee, used
+// both for the quote shown at checkout and for the amount charged on the order.
+func quoteDeliveryFee(db *gorm.DB, storeUUID uuid.UUID, customerLat, customerLng float64) deliveryFeeQuote {
+	var distanceKm float64
+	hasDistance := false
+	var storeCountry string
 
-		var distanceKm float64
-		hasDistance := false
-		var storeCountry string
-
-		if storeIDStr != "" {
-			if storeUUID, err := uuid.Parse(storeIDStr); err == nil {
-				var store models.Store
-				if err := db.Select("lat, lng, country").First(&store, "id = ?", storeUUID).Error; err == nil {
-					storeCountry = store.Country
-					if (store.Lat != 0 || store.Lng != 0) && (customerLat != 0 || customerLng != 0) {
-						distanceKm = haversineKm(customerLat, customerLng, store.Lat, store.Lng)
-						hasDistance = true
-					}
-				}
+	if storeUUID != uuid.Nil {
+		var store models.Store
+		if err := db.Select("lat, lng, country").First(&store, "id = ?", storeUUID).Error; err == nil {
+			storeCountry = store.Country
+			if (store.Lat != 0 || store.Lng != 0) && (customerLat != 0 || customerLng != 0) {
+				distanceKm = haversineKm(customerLat, customerLng, store.Lat, store.Lng)
+				hasDistance = true
 			}
 		}
+	}
 
-		holiday := pricing.ForStore(db, storeCountry, time.Now())
-		result := computeDeliveryFee(hour, distanceKm, hasDistance, holiday)
+	holiday := pricing.ForStore(db, storeCountry, time.Now())
+	return deliveryFeeQuote{
+		result:      computeDeliveryFee(time.Now().UTC().Hour(), distanceKm, hasDistance, holiday),
+		holiday:     holiday,
+		hasDistance: hasDistance,
+	}
+}
 
+func GetDeliveryFee(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		customerLat, _ := strconv.ParseFloat(c.Query("lat"), 64)
+		customerLng, _ := strconv.ParseFloat(c.Query("lng"), 64)
+		storeUUID, _ := uuid.Parse(c.Query("store_id"))
+
+		q := quoteDeliveryFee(db, storeUUID, customerLat, customerLng)
 		resp := gin.H{
-			"fee":                   result.Fee,
-			"reason":                result.Reason,
-			"breakdown":             result.Breakdown,
-			"holiday_pricing":       holiday.Active,
-			"holiday_name":          holiday.HolidayName,
-			"holiday_surcharge_pct": holiday.SurchargePct,
+			"fee":                   q.result.Fee,
+			"reason":                q.result.Reason,
+			"breakdown":             q.result.Breakdown,
+			"holiday_pricing":       q.holiday.Active,
+			"holiday_name":          q.holiday.HolidayName,
+			"holiday_surcharge_pct": q.holiday.SurchargePct,
 		}
-		if hasDistance {
-			resp["distance_km"] = result.DistanceKm
+		if q.hasDistance {
+			resp["distance_km"] = q.result.DistanceKm
 		}
 		c.JSON(http.StatusOK, resp)
 	}
@@ -997,7 +1034,7 @@ func VerifyOrderPayment(db *gorm.DB) gin.HandlerFunc {
 		// Call Paystack verify API
 		paystackSecret := os.Getenv("PAYSTACK_SECRET_KEY")
 		psReq, _ := http.NewRequest("GET",
-			"https://api.paystack.co/transaction/verify/"+reference, nil)
+			"https://api.paystack.co/transaction/verify/"+url.PathEscape(reference), nil)
 		psReq.Header.Set("Authorization", "Bearer "+paystackSecret)
 
 		client := &http.Client{Timeout: 10 * time.Second}
@@ -1019,6 +1056,25 @@ func VerifyOrderPayment(db *gorm.DB) gin.HandlerFunc {
 		body, _ := io.ReadAll(psResp.Body)
 		if err := json.Unmarshal(body, &psResult); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to parse payment provider response"})
+			return
+		}
+
+		// Paystack must report the full order amount (in pesewas). Anything less
+		// is treated as not paid.
+		paidInFull := math.Round(psResult.Data.Amount) >= math.Round(order.TotalAmount*100)
+
+		// Only an order still awaiting payment moves to payment_confirmed —
+		// re-verifying later must not roll a delivered order back.
+		awaitingPayment := order.Status == models.OrderPending || order.Status == models.OrderPaymentPending
+
+		if psResult.Data.Status == "success" && !paidInFull {
+			log.Printf("[VerifyOrderPayment] order %s: Paystack amount %.0f pesewas < expected %.0f", order.ID, psResult.Data.Amount, order.TotalAmount*100)
+			c.JSON(http.StatusOK, gin.H{"status": "amount_mismatch"})
+			return
+		}
+
+		if psResult.Data.Status == "success" && !awaitingPayment {
+			c.JSON(http.StatusOK, gin.H{"status": "success", "amount": psResult.Data.Amount / 100, "channel": psResult.Data.Channel})
 			return
 		}
 
@@ -1232,6 +1288,12 @@ func GetOrderTracking(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		// Live driver location is only for the customer who placed the order.
+		if !ownsOrder(db, c, orderUUID) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Tracking information not found"})
+			return
+		}
+
 		// Fetch the tracking record. This is the "standalone" source for the Shopper app.
 		var delivery models.OrderDelivery
 		if err := db.Where("order_id = ?", orderUUID).First(&delivery).Error; err != nil {
@@ -1366,13 +1428,13 @@ func ListDriverOrderDeliveries(db, accountDB *gorm.DB) gin.HandlerFunc {
 			db.Select("id, name, address, logo_url").Where("id = ?", d.Order.StoreID).First(&store)
 
 			response = append(response, gin.H{
-				"id":               d.ID.String(),
-				"order_id":         d.OrderID.String(),
-				"delivery_status":  d.Status,
-				"delivery_address": d.Order.DeliveryAddress,
-				"source":           "shopper",
-				"created_at":       d.CreatedAt,
-				"updated_at":       d.UpdatedAt,  // used by mobile timer as assignment reference
+				"id":                 d.ID.String(),
+				"order_id":           d.OrderID.String(),
+				"delivery_status":    d.Status,
+				"delivery_address":   d.Order.DeliveryAddress,
+				"source":             "shopper",
+				"created_at":         d.CreatedAt,
+				"updated_at":         d.UpdatedAt,              // used by mobile timer as assignment reference
 				"driver_assigned_at": d.Order.DriverAssignedAt, // set by admin at assignment
 				// Raw delivery fee + the driver's 60% cut of it — the mobile app must never
 				// show the driver the full delivery fee as their own earnings.
@@ -1460,21 +1522,46 @@ func GetOrderDeliveryDetail(db, accountDB *gorm.DB) gin.HandlerFunc {
 
 func GenerateOrderOTP(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		deliveryID, _ := uuid.Parse(c.Param("id"))
-		otp := fmt.Sprintf("%04d", time.Now().UnixNano()%10000)
+		deliveryID, err := uuid.Parse(c.Param("id"))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid delivery id"})
+			return
+		}
 
-		if err := db.Model(&models.OrderDelivery{}).Where("id = ?", deliveryID).Update("otp", otp).Error; err != nil {
+		var d models.OrderDelivery
+		if err := db.Where("id = ?", deliveryID).First(&d).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Delivery not found"})
+			return
+		}
+		if !isAssignedDriver(c, d.DriverID) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "This delivery is not assigned to you"})
+			return
+		}
+
+		otp, err := utils.RandomDigits(4)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate OTP"})
+			return
+		}
+		if err := db.Model(&models.OrderDelivery{}).Where("id = ?", deliveryID).
+			Updates(map[string]interface{}{"otp": otp, "otp_attempts": 0}).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate OTP"})
 			return
 		}
 
-		c.JSON(http.StatusOK, gin.H{"otp": otp, "expires_in": 300})
+		// The code is shown only in the customer's app. Returning it here would
+		// let the driver confirm a delivery they never handed over.
+		c.JSON(http.StatusOK, gin.H{"message": "OTP sent to the customer", "expires_in": 300})
 	}
 }
 
 func VerifyOrderOTP(db, accountDB *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		deliveryID, _ := uuid.Parse(c.Param("id"))
+		deliveryID, err := uuid.Parse(c.Param("id"))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid delivery id"})
+			return
+		}
 		var req struct {
 			OTP string `json:"otp" binding:"required"`
 		}
@@ -1484,7 +1571,21 @@ func VerifyOrderOTP(db, accountDB *gorm.DB) gin.HandlerFunc {
 		}
 
 		var d models.OrderDelivery
-		if err := db.Where("id = ? AND otp = ?", deliveryID, req.OTP).First(&d).Error; err != nil {
+		if err := db.Where("id = ?", deliveryID).First(&d).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Delivery not found"})
+			return
+		}
+		if !isAssignedDriver(c, d.DriverID) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "This delivery is not assigned to you"})
+			return
+		}
+		if d.OTP == "" || d.OTPAttempts >= utils.MaxHandoverOTPAttempts {
+			c.JSON(http.StatusTooManyRequests, gin.H{"error": "Too many incorrect codes. Generate a new code and ask the customer again."})
+			return
+		}
+		if subtle.ConstantTimeCompare([]byte(d.OTP), []byte(req.OTP)) != 1 {
+			db.Model(&models.OrderDelivery{}).Where("id = ?", deliveryID).
+				Update("otp_attempts", gorm.Expr("otp_attempts + 1"))
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid OTP code"})
 			return
 		}
@@ -1493,7 +1594,7 @@ func VerifyOrderOTP(db, accountDB *gorm.DB) gin.HandlerFunc {
 		now := time.Now()
 		db.Transaction(func(tx *gorm.DB) error {
 			tx.Model(&models.OrderDelivery{}).Where("id = ?", deliveryID).Updates(map[string]interface{}{
-				"status": "delivered", "delivered_at": &now,
+				"status": "delivered", "delivered_at": &now, "otp": "",
 			})
 			tx.Model(&models.Order{}).Where("id = ?", d.OrderID).Updates(map[string]interface{}{
 				"status": models.OrderDelivered, "delivered_at": &now,
@@ -1513,7 +1614,16 @@ func VerifyOrderOTP(db, accountDB *gorm.DB) gin.HandlerFunc {
 
 func GetOrderOTP(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		orderID, _ := uuid.Parse(c.Param("id"))
+		orderID, err := uuid.Parse(c.Param("id"))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid order id"})
+			return
+		}
+		// Only the customer who placed the order may read its handover code.
+		if !ownsOrder(db, c, orderID) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Delivery not found"})
+			return
+		}
 		var d models.OrderDelivery
 		if err := db.Where("order_id = ?", orderID).First(&d).Error; err != nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Delivery not found"})
@@ -1525,6 +1635,25 @@ func GetOrderOTP(db *gorm.DB) gin.HandlerFunc {
 			"verified": d.Status == "delivered",
 		})
 	}
+}
+
+// ownsOrder reports whether the caller placed the order (staff always pass).
+func ownsOrder(db *gorm.DB, c *gin.Context, orderID uuid.UUID) bool {
+	if middleware.IsStaff(c) {
+		return true
+	}
+	var count int64
+	db.Model(&models.Order{}).Where("id = ? AND user_id = ?", orderID, c.GetString("user_id")).Count(&count)
+	return count > 0
+}
+
+// isAssignedDriver reports whether the caller is the driver assigned to a
+// delivery (superadmin always passes).
+func isAssignedDriver(c *gin.Context, driverID *uuid.UUID) bool {
+	if middleware.HasAnyRole(c, models.RoleSuperAdmin) {
+		return true
+	}
+	return driverID != nil && driverID.String() == c.GetString("user_id")
 }
 
 // RateOrderDelivery lets the customer rate their driver after a completed shopper order delivery.
@@ -1663,17 +1792,22 @@ func UploadMedia(store *storage.Client) gin.HandlerFunc {
 			return
 		}
 
-		// Validate extension
-		ext := strings.ToLower(filepath.Ext(file.Filename))
-		if ext != ".jpg" && ext != ".jpeg" && ext != ".png" && ext != ".webp" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid file type. Only JPG, JPEG, PNG, and WEBP are allowed."})
+		bucket := c.DefaultPostForm("bucket", "general")
+		if !storage.UploadBucketAllowed(bucket, middleware.IsStaff(c)) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "Uploads to this location are not allowed"})
 			return
 		}
 
-		bucket := c.DefaultPostForm("bucket", "general")
+		// File type is checked from the file's content inside UploadFile —
+		// the extension and client Content-Type are not trusted.
 		url, err := store.UploadFile(file, bucket)
+		if errors.Is(err, storage.ErrUnsupportedFileType) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid file type. Only JPG, JPEG, PNG, and WEBP are allowed."})
+			return
+		}
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to upload image: " + err.Error()})
+			log.Printf("[UploadMedia] upload failed: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to upload image"})
 			return
 		}
 
@@ -1747,17 +1881,17 @@ func orderToMap(order models.Order, payment models.Payment, driverName string, i
 	}
 
 	return gin.H{
-		"id":                  order.ID.String(),
-		"status":              order.Status,
-		"total_amount":        order.TotalAmount,
-		"delivery_fee":        order.DeliveryFee,
-		"created_at":          order.CreatedAt,
-		"delivery_address":    order.DeliveryAddress,
-		"paystack_reference":  order.PaystackReference,
-		"driver_user_id":      driverUserID,
-		"driver_name":         driverName,
-		"driver_assigned_at":  driverAssignedAt,
-		"items":               items,
-		"payment":             orderPayment,
+		"id":                 order.ID.String(),
+		"status":             order.Status,
+		"total_amount":       order.TotalAmount,
+		"delivery_fee":       order.DeliveryFee,
+		"created_at":         order.CreatedAt,
+		"delivery_address":   order.DeliveryAddress,
+		"paystack_reference": order.PaystackReference,
+		"driver_user_id":     driverUserID,
+		"driver_name":        driverName,
+		"driver_assigned_at": driverAssignedAt,
+		"items":              items,
+		"payment":            orderPayment,
 	}
 }

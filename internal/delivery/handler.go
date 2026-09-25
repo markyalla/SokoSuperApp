@@ -2,14 +2,18 @@ package delivery
 
 import (
 	"bytes"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
 	"math"
 	"net/http"
+	"net/url"
 	neturl "net/url"
 	"os"
+	"sokoapp/internal/middleware"
 	"sokoapp/internal/models"
+	"sokoapp/internal/utils"
 	"sokoapp/internal/ws"
 	"strconv"
 	"strings"
@@ -415,7 +419,7 @@ func VerifyDeliveryPayment(deliveryDB *gorm.DB) gin.HandlerFunc {
 		}
 
 		secret := os.Getenv("PAYSTACK_SECRET_KEY")
-		req, _ := http.NewRequest("GET", "https://api.paystack.co/transaction/verify/"+ref, nil)
+		req, _ := http.NewRequest("GET", "https://api.paystack.co/transaction/verify/"+url.PathEscape(ref), nil)
 		req.Header.Set("Authorization", "Bearer "+secret)
 
 		client := &http.Client{Timeout: 10 * time.Second}
@@ -580,9 +584,19 @@ func RequestCashout(deliveryDB, shopperDB *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		// Balance check + insert run in one transaction holding a per-driver
+		// advisory lock: two simultaneous requests would otherwise both pass
+		// the balance check and together withdraw more than was earned.
+		tx := deliveryDB.Begin()
+		defer tx.Rollback()
+		if err := tx.Exec("SELECT pg_advisory_xact_lock(hashtext(?))", "cashout:"+driverID.String()).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create cashout request"})
+			return
+		}
+
 		// Calculate available balance (same logic as GetDriverEarnings)
 		var parcelEarnings float64
-		deliveryDB.Model(&models.DriverEarning{}).
+		tx.Model(&models.DriverEarning{}).
 			Where("driver_user_id = ?", driverID).
 			Select("COALESCE(SUM(amount), 0)").Scan(&parcelEarnings)
 
@@ -595,12 +609,12 @@ func RequestCashout(deliveryDB, shopperDB *gorm.DB) gin.HandlerFunc {
 			Scan(&shopperResult)
 
 		var pendingCashout float64
-		deliveryDB.Model(&models.DriverCashoutRequest{}).
+		tx.Model(&models.DriverCashoutRequest{}).
 			Where("driver_user_id = ? AND status = ?", driverID, "pending").
 			Select("COALESCE(SUM(amount), 0)").Scan(&pendingCashout)
 
 		var paidCashout float64
-		deliveryDB.Model(&models.DriverCashoutRequest{}).
+		tx.Model(&models.DriverCashoutRequest{}).
 			Where("driver_user_id = ? AND status = ?", driverID, "paid").
 			Select("COALESCE(SUM(amount), 0)").Scan(&paidCashout)
 
@@ -619,7 +633,11 @@ func RequestCashout(deliveryDB, shopperDB *gorm.DB) gin.HandlerFunc {
 			Method:       req.Method,
 			Status:       "pending",
 		}
-		if err := deliveryDB.Create(&cashout).Error; err != nil {
+		if err := tx.Create(&cashout).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create cashout request"})
+			return
+		}
+		if err := tx.Commit().Error; err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create cashout request"})
 			return
 		}
@@ -694,6 +712,12 @@ func GetParcelDetail(db, accountDB *gorm.DB) gin.HandlerFunc {
 		var assignment models.DeliveryAssignment
 		db.Where("order_id = ?", parcel.ID).Order("created_at desc").First(&assignment)
 
+		// Addresses and phone numbers: sender, receiver, assigned driver or staff only.
+		if !isParcelParty(c, parcel) && !(assignment.ID != uuid.Nil && isAssignedDriver(c, assignment.DriverUserID)) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "parcel not found"})
+			return
+		}
+
 		status := "pending"
 		riderName := "Assigning driver..."
 		riderPhone := ""
@@ -747,6 +771,13 @@ func GetParcelOTP(db *gorm.DB) gin.HandlerFunc {
 		parcelID, err := uuid.Parse(c.Param("id"))
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid delivery ID"})
+			return
+		}
+
+		// Only the sender or receiver may read the handover code.
+		var parcel models.DeliveryOrder
+		if err := db.Where("id = ?", parcelID).First(&parcel).Error; err != nil || !isParcelParty(c, parcel) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "delivery not found"})
 			return
 		}
 
@@ -860,6 +891,11 @@ func GetDeliveryDetail(db *gorm.DB) gin.HandlerFunc {
 
 		var a models.DeliveryAssignment
 		if err := db.Where("id = ?", deliveryID).First(&a).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "delivery not found"})
+			return
+		}
+		// A driver may view an open offer or a delivery assigned to them.
+		if a.DriverUserID != nil && !isAssignedDriver(c, a.DriverUserID) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "delivery not found"})
 			return
 		}
@@ -1009,19 +1045,43 @@ func UpdateStatus(db *gorm.DB, hub *ws.Hub) gin.HandlerFunc {
 
 func GenerateOTP(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		deliveryID, _ := uuid.Parse(c.Param("id"))
-		otp := fmt.Sprintf("%04d", time.Now().UnixNano()%10000)
-		if err := db.Model(&models.DeliveryAssignment{}).Where("id = ?", deliveryID).Update("delivery_pin", otp).Error; err != nil {
+		deliveryID, err := uuid.Parse(c.Param("id"))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid delivery ID"})
+			return
+		}
+		var a models.DeliveryAssignment
+		if err := db.Where("id = ?", deliveryID).First(&a).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "delivery not found"})
+			return
+		}
+		if !isAssignedDriver(c, a.DriverUserID) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "this delivery is not assigned to you"})
+			return
+		}
+
+		otp, err := utils.RandomDigits(4)
+		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate OTP"})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"otp": otp, "expires_in": 300})
+		if err := db.Model(&models.DeliveryAssignment{}).Where("id = ?", deliveryID).
+			Updates(map[string]any{"delivery_pin": otp, "pin_attempts": 0}).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate OTP"})
+			return
+		}
+		// Shown only in the sender/receiver app — never returned to the driver.
+		c.JSON(http.StatusOK, gin.H{"message": "OTP sent to the customer", "expires_in": 300})
 	}
 }
 
 func VerifyOTP(db, accountDB *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		deliveryID, _ := uuid.Parse(c.Param("id"))
+		deliveryID, err := uuid.Parse(c.Param("id"))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid delivery ID"})
+			return
+		}
 		var req struct {
 			OTP string `json:"otp" binding:"required"`
 		}
@@ -1031,7 +1091,25 @@ func VerifyOTP(db, accountDB *gorm.DB) gin.HandlerFunc {
 		}
 
 		var a models.DeliveryAssignment
-		if err := db.Where("id = ? AND delivery_pin = ?", deliveryID, req.OTP).First(&a).Error; err != nil {
+		if err := db.Where("id = ?", deliveryID).First(&a).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "delivery not found"})
+			return
+		}
+		if !isAssignedDriver(c, a.DriverUserID) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "this delivery is not assigned to you"})
+			return
+		}
+		if a.Status == models.DelDelivered {
+			c.JSON(http.StatusConflict, gin.H{"error": "delivery already confirmed"})
+			return
+		}
+		if a.DeliveryPin == "" || a.PinAttempts >= utils.MaxHandoverOTPAttempts {
+			c.JSON(http.StatusTooManyRequests, gin.H{"error": "too many incorrect codes — generate a new code and ask the customer again"})
+			return
+		}
+		if subtle.ConstantTimeCompare([]byte(a.DeliveryPin), []byte(req.OTP)) != 1 {
+			db.Model(&models.DeliveryAssignment{}).Where("id = ?", deliveryID).
+				Update("pin_attempts", gorm.Expr("pin_attempts + 1"))
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid OTP code"})
 			return
 		}
@@ -1045,6 +1123,7 @@ func VerifyOTP(db, accountDB *gorm.DB) gin.HandlerFunc {
 			"delivered_at":    &now,
 			"driver_earnings": driverEarnings,
 			"platform_cut":    platformCut,
+			"delivery_pin":    "",
 		})
 
 		// Create DriverEarning record so earnings are reflected in the dashboard
@@ -1335,4 +1414,24 @@ func FileParcelComplaint(deliveryDB *gorm.DB) gin.HandlerFunc {
 
 		c.JSON(http.StatusCreated, gin.H{"message": "Complaint filed, our team will review it", "complaint": complaint})
 	}
+}
+
+// isParcelParty reports whether the caller sent or is receiving the parcel
+// (staff always pass).
+func isParcelParty(c *gin.Context, parcel models.DeliveryOrder) bool {
+	if middleware.IsStaff(c) {
+		return true
+	}
+	uid := c.GetString("user_id")
+	return parcel.UserID.String() == uid ||
+		(parcel.ReceiverUserID != nil && parcel.ReceiverUserID.String() == uid)
+}
+
+// isAssignedDriver reports whether the caller is the driver assigned to a
+// delivery (superadmin always passes).
+func isAssignedDriver(c *gin.Context, driverID *uuid.UUID) bool {
+	if middleware.HasAnyRole(c, models.RoleSuperAdmin) {
+		return true
+	}
+	return driverID != nil && driverID.String() == c.GetString("user_id")
 }

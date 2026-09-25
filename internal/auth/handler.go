@@ -1,6 +1,9 @@
 package auth
 
 import (
+	"encoding/hex"
+	"crypto/subtle"
+	"crypto/sha256"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
@@ -129,17 +132,10 @@ func Register(db *gorm.DB, store *storage.Client, distributor worker.TaskDistrib
 				return err
 			}
 
-			var userCount int64
-			if err := tx.Model(&models.User{}).Count(&userCount).Error; err != nil {
-				return err
-			}
-
-			roleName := models.RoleUser
-			if userCount == 1 {
-				roleName = models.RoleSuperAdmin
-			}
-
-			role := models.UserRole{UserID: user.ID, Role: roleName}
+			// Public sign-ups are always plain users. (Previously the first
+			// account became superadmin — after a database reset, whoever
+			// registered first would have taken over the platform.)
+			role := models.UserRole{UserID: user.ID, Role: models.RoleUser}
 			if err := tx.Create(&role).Error; err != nil {
 				return err
 			}
@@ -200,6 +196,11 @@ func Register(db *gorm.DB, store *storage.Client, distributor worker.TaskDistrib
 const (
 	maxLoginAttempts     = 5
 	loginLockoutDuration = 30 * time.Minute
+
+	// maxOTPAttempts caps wrong guesses at a password-reset OTP; resetTokenTTL
+	// is how long the token issued by verify-otp stays valid.
+	maxOTPAttempts = 5
+	resetTokenTTL  = 15 * time.Minute
 )
 
 func Login(db *gorm.DB) gin.HandlerFunc {
@@ -215,6 +216,11 @@ func Login(db *gorm.DB) gin.HandlerFunc {
 			Where("email = ? OR phone_number = ?", req.Identifier, req.Identifier).
 			First(&user).Error; err != nil {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid credentials"})
+			return
+		}
+
+		if user.IsDeleted || !user.IsActive {
+			c.JSON(http.StatusForbidden, gin.H{"error": "This account is not active. Contact support if you think this is a mistake."})
 			return
 		}
 
@@ -358,6 +364,10 @@ func UpdateMe(db *gorm.DB) gin.HandlerFunc {
 			updates["email"] = req.Email
 		}
 		if req.ProfileImageURL != "" {
+			if !storage.ValidMediaPath(req.ProfileImageURL, "avatars", "profile-images") {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid profile_image_url — upload the photo first"})
+				return
+			}
 			updates["profile_image_url"] = req.ProfileImageURL
 		}
 
@@ -413,6 +423,14 @@ func SubmitKYC(db *gorm.DB) gin.HandlerFunc {
 					req.IDType,
 				),
 			})
+			return
+		}
+
+		// Guard 1b: the ID image must be a path returned by /media/upload into
+		// the private kyc bucket — never an arbitrary string (it is rendered in
+		// the admin panel).
+		if req.IDImageURL != "" && !storage.ValidMediaPath(req.IDImageURL, "kyc") {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id_image_url — upload the ID photo first"})
 			return
 		}
 
@@ -583,7 +601,7 @@ func Refresh(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		var stored models.RefreshToken
-		if err := db.Where("token_hash = ?", req.RefreshToken).First(&stored).Error; err != nil {
+		if err := db.Where("token_hash = ?", hashToken(req.RefreshToken)).First(&stored).Error; err != nil {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Refresh token not recognized"})
 			return
 		}
@@ -595,6 +613,10 @@ func Refresh(db *gorm.DB) gin.HandlerFunc {
 		var user models.User
 		if err := db.Preload("Roles").Preload("KYC").Where("id = ?", sub).First(&user).Error; err != nil {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "User not found"})
+			return
+		}
+		if user.IsDeleted || !user.IsActive {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "This account is not active"})
 			return
 		}
 
@@ -623,7 +645,7 @@ func Logout(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		if err := db.Model(&models.RefreshToken{}).
-			Where("token_hash = ?", req.RefreshToken).
+			Where("token_hash = ?", hashToken(req.RefreshToken)).
 			Updates(map[string]interface{}{"revoked_at": time.Now()}).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Logout failed"})
 			return
@@ -671,12 +693,19 @@ func persistRefreshToken(db *gorm.DB, userID uuid.UUID, token, ip, ua string) {
 	deviceInfo, _ := json.Marshal(map[string]string{"user_agent": ua})
 	rt := models.RefreshToken{
 		UserID:     userID,
-		TokenHash:  token,
+		TokenHash:  hashToken(token),
 		IPAddress:  ip,
 		DeviceInfo: string(deviceInfo),
 		ExpiresAt:  time.Now().Add(time.Hour * 24 * 7),
 	}
 	db.Create(&rt)
+}
+
+// hashToken returns the SHA-256 of a token. Refresh tokens are stored hashed so
+// a database leak doesn't hand out live sessions.
+func hashToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
 }
 
 func extractRoles(userRoles []models.UserRole) []string {
@@ -818,15 +847,38 @@ func VerifyOTP(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		if err := bcrypt.CompareHashAndPassword([]byte(record.OTPHash), []byte(req.OTP)); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Incorrect OTP"})
+		if record.Attempts >= maxOTPAttempts {
+			db.Delete(&record)
+			c.JSON(http.StatusTooManyRequests, gin.H{"error": "Too many incorrect codes. Please request a new OTP."})
 			return
 		}
 
-		// Mark as verified so reset-password can proceed
-		db.Model(&record).Update("is_used", true)
+		if err := bcrypt.CompareHashAndPassword([]byte(record.OTPHash), []byte(req.OTP)); err != nil {
+			db.Model(&record).Update("attempts", gorm.Expr("attempts + 1"))
+			remaining := maxOTPAttempts - record.Attempts - 1
+			if remaining <= 0 {
+				db.Delete(&record)
+				c.JSON(http.StatusTooManyRequests, gin.H{"error": "Too many incorrect codes. Please request a new OTP."})
+				return
+			}
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Incorrect OTP. %d attempt(s) left.", remaining)})
+			return
+		}
 
-		c.JSON(http.StatusOK, gin.H{"message": "OTP verified"})
+		// Exchange the OTP for a one-time reset token. reset-password requires
+		// it, so knowing the email alone is never enough to set a new password.
+		resetToken, err := randomToken()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to verify OTP"})
+			return
+		}
+		db.Model(&record).Updates(map[string]interface{}{
+			"is_used":    true,
+			"otp_hash":   hashToken(resetToken),
+			"expires_at": time.Now().Add(resetTokenTTL),
+		})
+
+		c.JSON(http.StatusOK, gin.H{"message": "OTP verified", "reset_token": resetToken})
 	}
 }
 
@@ -838,6 +890,7 @@ func ResetPassword(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req struct {
 			Email           string `json:"email"            binding:"required,email"`
+			ResetToken      string `json:"reset_token"      binding:"required"`
 			NewPassword     string `json:"new_password"     binding:"required,min=8"`
 			ConfirmPassword string `json:"confirm_password" binding:"required"`
 		}
@@ -859,8 +912,12 @@ func ResetPassword(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		// Guard against stale verified OTPs (allow 15 min window after verification)
-		if time.Now().After(record.ExpiresAt.Add(5 * time.Minute)) {
+		if subtle.ConstantTimeCompare([]byte(record.OTPHash), []byte(hashToken(req.ResetToken))) != 1 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Reset session is invalid. Please start the reset flow again"})
+			return
+		}
+
+		if time.Now().After(record.ExpiresAt) {
 			db.Delete(&record)
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Session expired. Please start again"})
 			return
@@ -884,6 +941,14 @@ func ResetPassword(db *gorm.DB) gin.HandlerFunc {
 			}).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update password"})
 			return
+		}
+
+		// Sign out every existing session — if the reset was because someone
+		// else had the password, their refresh tokens must stop working.
+		var u models.User
+		if db.Select("id").Where("email = ?", req.Email).First(&u).Error == nil {
+			db.Model(&models.RefreshToken{}).Where("user_id = ? AND revoked_at IS NULL", u.ID).
+				Update("revoked_at", time.Now())
 		}
 
 		// Clean up
@@ -914,4 +979,13 @@ func buildUserResponse(
 		"driver_profile":    driverProfile,
 		"kyc":               kyc,
 	}
+}
+
+// randomToken returns 32 bytes of crypto-random data, hex encoded.
+func randomToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }

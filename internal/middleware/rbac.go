@@ -35,3 +35,23 @@ func AuthorizeRoles(allowedRoles ...models.RoleName) gin.HandlerFunc {
 		c.Next()
 	}
 }
+
+// HasAnyRole reports whether the authenticated caller holds any of the given roles.
+func HasAnyRole(c *gin.Context, allowed ...models.RoleName) bool {
+	raw, _ := c.Get("roles")
+	roles, _ := raw.([]string)
+	for _, r := range roles {
+		for _, a := range allowed {
+			if r == string(a) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// IsStaff reports whether the caller holds superadmin or any module-admin role.
+func IsStaff(c *gin.Context) bool {
+	return HasAnyRole(c, models.RoleSuperAdmin, models.RoleShopperAdmin, models.RoleDeliveryAdmin,
+		models.RoleLoanAdmin, models.RoleSusuAdmin)
+}

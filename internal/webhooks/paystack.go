@@ -33,9 +33,15 @@ func HandlePaystack(dbs *db.Manager, distributor worker.TaskDistributor, hub *ws
 		}
 
 		secret := os.Getenv("PAYSTACK_SECRET_KEY")
+		if secret == "" {
+			// An empty key would let anyone compute a "valid" signature.
+			log.Println("[paystack webhook] PAYSTACK_SECRET_KEY is not set — rejecting webhook")
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "webhook not configured"})
+			return
+		}
 		h := hmac.New(sha512.New, []byte(secret))
 		h.Write(payload)
-		if hex.EncodeToString(h.Sum(nil)) != hash {
+		if !hmac.Equal([]byte(hex.EncodeToString(h.Sum(nil))), []byte(hash)) {
 			audit.Log(dbs.Account, audit.Entry{
 				Category:  audit.CategoryPaymentFailure,
 				Severity:  audit.SeverityCritical,
