@@ -498,6 +498,10 @@ export default function CheckoutScreen() {
               originWhitelist={['*']}
               javaScriptEnabled={true}
               domStorageEnabled={true}
+              // Card payments open the bank's 3-D Secure page as a new window;
+              // load it in this WebView instead of silently dropping it.
+              setSupportMultipleWindows={false}
+              thirdPartyCookiesEnabled
               onNavigationStateChange={handleNavigationStateChange}
               startInLoadingState={true}
               renderLoading={() => (

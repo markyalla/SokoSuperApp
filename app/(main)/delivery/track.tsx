@@ -588,6 +588,10 @@ export default function DeliveryTrackScreen() {
             style={{ flex: 1 }}
             javaScriptEnabled
             domStorageEnabled
+            // Card payments open the bank's 3-D Secure page as a new window;
+            // load it in this WebView instead of silently dropping it.
+            setSupportMultipleWindows={false}
+            thirdPartyCookiesEnabled
           />
 
           {/* Manual confirmation button — shown after WebView loads */}

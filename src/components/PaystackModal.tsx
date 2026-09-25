@@ -43,6 +43,10 @@ export default function PaystackModal({ visible, checkoutUrl, onClose, onDone }:
           originWhitelist={['*']}
           javaScriptEnabled
           domStorageEnabled
+          // Card payments open the bank's 3-D Secure page as a new window;
+          // load it in this WebView instead of silently dropping it.
+          setSupportMultipleWindows={false}
+          thirdPartyCookiesEnabled
           onNavigationStateChange={handleNavigationStateChange}
           startInLoadingState
           renderLoading={() => (
