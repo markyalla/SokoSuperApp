@@ -2,13 +2,16 @@ import { useCallback, useEffect, useState } from 'react';
 import { AppState, Platform } from 'react-native';
 import JailMonkey from 'jail-monkey';
 
-export type DebugModeStatus = 'checking' | 'clean' | 'debug';
+// 'debug' — a debugger is attached to the app: block (real tampering risk).
+// 'warn'  — Developer options / USB debugging are on: warn but let the user
+//           continue. Many ordinary phones (and Google's review/test devices)
+//           have these on, so blocking them would lock out real users.
+export type DebugModeStatus = 'checking' | 'clean' | 'warn' | 'debug';
 
-// Flags a device with Android developer options / USB debugging turned on, or
-// with a debugger attached to the app. Skipped in __DEV__ (dev builds run with
-// USB debugging on by definition) and on web, where there is no native module.
-// Re-runs whenever the app returns to the foreground so a user who switches the
-// setting off in system settings gets straight back in.
+// Skipped in __DEV__ (dev builds run with a debugger/USB debugging by
+// definition) and on web, where there is no native module. Re-runs whenever
+// the app returns to the foreground so a user who changes the setting in
+// system settings gets the right screen straight away.
 export function useDebugModeCheck() {
   const [status, setStatus] = useState<DebugModeStatus>(
     __DEV__ || Platform.OS === 'web' ? 'clean' : 'checking'
@@ -22,7 +25,7 @@ export function useDebugModeCheck() {
         JailMonkey.isDevelopmentSettingsMode(),
       ]);
       const adb = JailMonkey.AdbEnabled();
-      setStatus(debugged || devSettings || adb ? 'debug' : 'clean');
+      setStatus(debugged ? 'debug' : devSettings || adb ? 'warn' : 'clean');
     } catch (e) {
       // Native module not linked (e.g. Expo Go) — don't lock users out over it.
       console.warn('[useDebugModeCheck] jail-monkey unavailable:', e);
