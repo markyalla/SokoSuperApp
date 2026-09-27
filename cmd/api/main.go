@@ -370,10 +370,22 @@ func main() {
 				bucket := c.Param("bucket")
 				filename := c.Param("filename")
 
-				// Identity documents are never public: staff only (SokoWeb
-				// fetches them server-side with the admin's token).
+				// Identity documents are never public: only staff (SokoWeb
+				// fetches them server-side with the admin's token) and the user
+				// whose KYC record references the file (their own Account screen).
 				if storage.PrivateBuckets[bucket] {
-					if c.GetString("user_id") == "" || !middleware.IsStaff(c) {
+					uid := c.GetString("user_id")
+					allowed := uid != "" && middleware.IsStaff(c)
+					if !allowed && uid != "" {
+						file := strings.TrimPrefix(filename, "/")
+						var n int64
+						dbs.Account.Table("kyc_submissions").
+							Where("user_id = ? AND (id_image_url = ? OR id_image_url = ? OR id_image_url LIKE ?)",
+								uid, "/"+bucket+"/"+file, bucket+"/"+file, "%/media/serve/"+bucket+"/"+file).
+							Count(&n)
+						allowed = n > 0
+					}
+					if !allowed {
 						c.JSON(http.StatusNotFound, gin.H{"error": "Image not found"})
 						return
 					}
