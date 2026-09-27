@@ -383,7 +383,12 @@ export default function AccountScreen() {
               />
               <InfoRow icon="id-card-outline" label="ID Document">
                 {kycIDImageURL ? (
-                  <Image source={{ uri: kycIDImageURL }} style={styles.idImageThumb} resizeMode="cover" />
+                  <Image
+                    // KYC photos are private — the API serves them only to their owner (or staff).
+                    source={{ uri: kycIDImageURL, headers: tokens?.access ? { Authorization: `Bearer ${tokens.access}` } : undefined }}
+                    style={styles.idImageThumb}
+                    resizeMode="cover"
+                  />
                 ) : (
                   <Text style={styles.noPhotoText}>No image uploaded</Text>
                 )}

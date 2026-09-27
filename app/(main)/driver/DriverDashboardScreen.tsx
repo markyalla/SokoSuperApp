@@ -25,6 +25,7 @@ import { Ionicons } from '@expo/vector-icons';
 import Toast from '../../../src/components/Toast';
 import { wsService } from '../../../src/services/websocket';
 import MapView, { Marker } from 'react-native-maps';
+import { mapsAvailable } from '../../../src/config/maps';
 
 // Shopper orders carry the customer's checkout GPS pin as user_latitude/
 // user_longitude; parcel deliveries carry it as dropoff_lat/dropoff_lng —
@@ -1321,6 +1322,9 @@ export default function DriverDashboardScreen() {
                   ? { latitude: driverLocation.lat, longitude: driverLocation.lng }
                   : null;
                 if (!customerCoords && !driverCoords) return null;
+                // No Google Maps key in this build → skip the native map (it would
+                // crash); the "Open in Maps" buttons below still work.
+                if (!mapsAvailable) return null;
 
                 const center = customerCoords || driverCoords!;
                 // Wide enough to comfortably fit both pins when both exist.

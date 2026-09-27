@@ -9,6 +9,7 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import MapView, { Marker } from 'react-native-maps';
+import { mapsAvailable } from '../../../src/config/maps';
 import { getOrderDetail, getDeliveryLocation, getCustomerOrderOTP, rateOrderDelivery, fileOrderComplaint } from '../../../src/api';
 
 interface Order {
@@ -753,6 +754,9 @@ export default function TrackOrderScreen() {
                 ? { latitude: Number(delivery.vehicle_latitude), longitude: Number(delivery.vehicle_longitude) }
                 : null;
               if (!customerCoords && !driverCoords) return null;
+              // No Google Maps key in this build → skip the native map (it would
+              // crash); the address and "View in Google Maps" button below remain.
+              if (!mapsAvailable) return null;
 
               const center = customerCoords || driverCoords!;
               const delta = customerCoords && driverCoords
