@@ -9,6 +9,7 @@ import { useAuthStore } from '../../../src/store/authStore';
 import { Ionicons } from '@expo/vector-icons';
 import { API_BASE_URL } from '../../../src/config/api';
 import { updateProfile, deleteAccount } from '../../../src/api';
+import { useAuthedImage } from '../../../src/hooks/useAuthedImage';
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -146,6 +147,8 @@ export default function AccountScreen() {
         ? kycIDImagePath
         : `${API_BASE_URL}/media/serve/${kycIDImagePath.replace(/^\/+/, '')}`)
     : null;
+  // KYC photos are private — fetched with the user's token, then shown.
+  const { uri: kycIDImageData, failed: kycIDImageFailed } = useAuthedImage(kycIDImageURL, tokens?.access);
 
   // ── Driver ────────────────────────────────────────────────────────────────
   // Always show driver data regardless of approval status
@@ -382,13 +385,12 @@ export default function AccountScreen() {
                 value={kycAddress_full || 'Not provided'}
               />
               <InfoRow icon="id-card-outline" label="ID Document">
-                {kycIDImageURL ? (
-                  <Image
-                    // KYC photos are private — the API serves them only to their owner (or staff).
-                    source={{ uri: kycIDImageURL, headers: tokens?.access ? { Authorization: `Bearer ${tokens.access}` } : undefined }}
-                    style={styles.idImageThumb}
-                    resizeMode="cover"
-                  />
+                {kycIDImageData ? (
+                  <Image source={{ uri: kycIDImageData }} style={styles.idImageThumb} resizeMode="cover" />
+                ) : kycIDImageURL && !kycIDImageFailed ? (
+                  <ActivityIndicator color="#FF8000" />
+                ) : kycIDImageURL ? (
+                  <Text style={styles.noPhotoText}>Couldn't load ID image</Text>
                 ) : (
                   <Text style={styles.noPhotoText}>No image uploaded</Text>
                 )}
