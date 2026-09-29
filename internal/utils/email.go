@@ -33,6 +33,14 @@ func SendEmail(to, subject, htmlBody string) error {
 }
 
 func OTPEmailBody(otp, fullName string) string {
+	return otpEmail(otp, fullName, "reset your password", "If you did not request a password reset, please ignore this email.")
+}
+
+func VerificationEmailBody(otp, fullName string) string {
+	return otpEmail(otp, fullName, "verify your email and finish creating your account", "If you did not sign up for SokoApp, please ignore this email.")
+}
+
+func otpEmail(otp, fullName, action, footer string) string {
 	name := fullName
 	if name == "" {
 		name = "there"
@@ -41,10 +49,10 @@ func OTPEmailBody(otp, fullName string) string {
 <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
   <h2 style="color:#FF8000;margin-bottom:4px">SokoApp</h2>
   <p>Hi %s,</p>
-  <p>Use the code below to reset your password. It expires in <strong>10 minutes</strong>.</p>
+  <p>Use the code below to %s. It expires in <strong>10 minutes</strong>.</p>
   <div style="background:#f3f4f6;border-radius:12px;padding:24px;text-align:center;margin:24px 0">
     <span style="font-size:36px;font-weight:700;letter-spacing:12px;color:#111827">%s</span>
   </div>
-  <p style="color:#6b7280;font-size:13px">If you did not request a password reset, please ignore this email.</p>
-</div>`, name, otp)
+  <p style="color:#6b7280;font-size:13px">%s</p>
+</div>`, name, action, otp, footer)
 }

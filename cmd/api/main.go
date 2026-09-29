@@ -357,6 +357,8 @@ func main() {
 		v1.POST("/auth/forgot-password", authRateLimit, auth.ForgotPassword(dbs.Account))
 		v1.POST("/auth/verify-otp", otpRateLimit, auth.VerifyOTP(dbs.Account))
 		v1.POST("/auth/reset-password", otpRateLimit, auth.ResetPassword(dbs.Account))
+		v1.POST("/auth/verify-email", otpRateLimit, auth.VerifyEmail(dbs.Account))
+		v1.POST("/auth/resend-verification", authRateLimit, auth.ResendVerification(dbs.Account))
 		v1.GET("/health", func(c *gin.Context) {
 			utils.SendSuccess(c, http.StatusOK, "Service is running", gin.H{"status": "UP"})
 		})

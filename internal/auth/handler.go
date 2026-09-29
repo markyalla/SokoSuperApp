@@ -160,27 +160,22 @@ func Register(db *gorm.DB, store *storage.Client, distributor worker.TaskDistrib
 			return
 		}
 
-		accessToken, refreshToken, err := generateTokenPair(user)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Token generation failed"})
-			return
-		}
-
-		persistRefreshToken(db, user.ID, refreshToken, c.ClientIP(), c.Request.UserAgent())
-
 		distributor.DistributeTaskProcessKYC(c.Request.Context(), &worker.KYCProcessingPayload{
 			UserID: user.ID.String(),
 		})
 
+		// No tokens yet — the user proves they own the email by entering the
+		// OTP at /auth/verify-email, which is what logs them in.
+		if err := issueEmailVerificationOTP(db, user); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Account created but the verification code could not be sent. Log in to get a new code."})
+			return
+		}
+
 		c.JSON(http.StatusCreated, gin.H{
-			"message":    "User registered successfully, KYC pending",
-			"kyc_status": models.KYCPending,
-			"id":         user.ID,
-			"tokens": gin.H{
-				"access":  accessToken,
-				"refresh": refreshToken,
-			},
-			"user": buildUserResponse(user, []string{string(models.RoleUser)}, &kyc, nil),
+			"message":               "Registration successful. Enter the code sent to your email to continue.",
+			"requires_verification": true,
+			"email":                 user.Email,
+			"id":                    user.ID,
 		})
 	}
 }
@@ -258,6 +253,21 @@ func Login(db *gorm.DB) gin.HandlerFunc {
 		if user.FailedLoginAttempts > 0 || user.LockedUntil != nil {
 			db.Model(&models.User{}).Where("id = ?", user.ID).
 				Updates(map[string]interface{}{"failed_login_attempts": 0, "locked_until": nil})
+		}
+
+		// Signed up under the OTP flow but never entered the code: send a
+		// fresh one and have the app open the OTP screen instead of logging in.
+		if hasPendingEmailVerification(db, user) {
+			if err := issueEmailVerificationOTP(db, user); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to send verification code"})
+				return
+			}
+			c.JSON(http.StatusForbidden, gin.H{
+				"error":                 "Please verify your email. We've sent a new code to " + user.Email + ".",
+				"requires_verification": true,
+				"email":                 user.Email,
+			})
+			return
 		}
 
 		// Create KYC row if missing (legacy accounts created before KYC flow).
@@ -938,6 +948,8 @@ func ResetPassword(db *gorm.DB) gin.HandlerFunc {
 				"password_hash":         string(hash),
 				"failed_login_attempts": 0,
 				"locked_until":          nil,
+				// Resetting via an emailed code also proves the email is theirs.
+				"is_email_verified": true,
 			}).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update password"})
 			return
@@ -949,6 +961,7 @@ func ResetPassword(db *gorm.DB) gin.HandlerFunc {
 		if db.Select("id").Where("email = ?", req.Email).First(&u).Error == nil {
 			db.Model(&models.RefreshToken{}).Where("user_id = ? AND revoked_at IS NULL", u.ID).
 				Update("revoked_at", time.Now())
+			db.Where("user_id = ? AND purpose = ?", u.ID, purposeEmailVerification).Delete(&models.OTPVerification{})
 		}
 
 		// Clean up
