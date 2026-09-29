@@ -8,6 +8,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { API_BASE_URL } from '../../src/config/api';
 import { accountService } from '../../src/store/accountService';
 import { useAuthStore } from '../../src/store/authStore';
+import { friendlyError } from '../../src/utils/friendlyError';
 
 const OTP_LENGTH = 6;
 
@@ -72,7 +73,7 @@ export default function VerifyOTPScreen() {
       } catch (err: any) {
         setDigits(Array(OTP_LENGTH).fill(''));
         inputs.current[0]?.focus();
-        Alert.alert('Invalid Code', err?.response?.data?.error || err?.message || 'Please try again.');
+        Alert.alert('Invalid Code', friendlyError(err, 'Please try again.'));
       } finally {
         setLoading(false);
       }
@@ -89,7 +90,7 @@ export default function VerifyOTPScreen() {
       // The API exchanges the OTP for a one-time token that reset-password requires.
       router.replace({ pathname: '/(auth)/reset-password', params: { email, resetToken: json.reset_token } });
     } catch (err: any) {
-      Alert.alert('Invalid Code', err.message || 'Please try again.');
+      Alert.alert('Invalid Code', friendlyError(err, 'Please try again.'));
     } finally {
       setLoading(false);
     }

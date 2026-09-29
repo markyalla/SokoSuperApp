@@ -11,6 +11,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import MapView, { Marker } from 'react-native-maps';
 import { mapsAvailable } from '../../../src/config/maps';
 import { getOrders, getOrderDetail, getDeliveryLocation, getCustomerOrderOTP, rateOrderDelivery, fileOrderComplaint } from '../../../src/api';
+import { friendlyError } from '../../../src/utils/friendlyError';
 
 interface Order {
   id: string | number;
@@ -321,7 +322,7 @@ function TrackOrderView({ orderId, showMap }: { orderId: string; showMap: boolea
   }
 }
     } catch (e: any) {
-      if (loading) Alert.alert('Error', e.message);
+      if (loading) Alert.alert('Error', friendlyError(e));
     } finally {
       setLoading(false);
     }

@@ -6,6 +6,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { API_BASE_URL } from '../../src/config/api';
+import { friendlyError } from '../../src/utils/friendlyError';
 
 export default function ForgotPasswordScreen() {
   const router = useRouter();
@@ -30,7 +31,7 @@ export default function ForgotPasswordScreen() {
       if (!res.ok) throw new Error(json.error || 'Request failed');
       router.push({ pathname: '/(auth)/verify-otp', params: { email: trimmed } });
     } catch (err: any) {
-      Alert.alert('Error', err.message || 'Something went wrong.');
+      Alert.alert('Error', friendlyError(err, 'Something went wrong.'));
     } finally {
       setLoading(false);
     }

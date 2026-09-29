@@ -14,6 +14,7 @@ import {
   rejectJoinRequest,
 } from '../../../src/api';
 import { GroupDetailResponse, SusuContribution, SusuJoinRequest, SusuMember, SusuPayout } from '../../../src/types/susu';
+import { friendlyError } from '../../../src/utils/friendlyError';
 
 type Tab = 'members' | 'contributions' | 'payouts' | 'requests';
 
@@ -146,7 +147,7 @@ export default function GroupDetailScreen() {
               fetchDetail();
               fetchJoinRequests();
             } catch (e: any) {
-              Alert.alert('Error', e?.response?.data?.error ?? 'Failed to approve request.');
+              Alert.alert('Error', friendlyError(e, 'Failed to approve request.'));
             } finally {
               setHandlingRequestId(null);
             }
@@ -172,7 +173,7 @@ export default function GroupDetailScreen() {
               await rejectJoinRequest(id, request.id);
               fetchJoinRequests();
             } catch (e: any) {
-              Alert.alert('Error', e?.response?.data?.error ?? 'Failed to reject request.');
+              Alert.alert('Error', friendlyError(e, 'Failed to reject request.'));
             } finally {
               setHandlingRequestId(null);
             }

@@ -26,6 +26,7 @@ import Toast from '../../../src/components/Toast';
 import { wsService } from '../../../src/services/websocket';
 import MapView, { Marker } from 'react-native-maps';
 import { mapsAvailable } from '../../../src/config/maps';
+import { friendlyError } from '../../../src/utils/friendlyError';
 
 // Shopper orders carry the customer's checkout GPS pin as user_latitude/
 // user_longitude; parcel deliveries carry it as dropoff_lat/dropoff_lng —
@@ -380,7 +381,7 @@ export default function DriverDashboardScreen() {
         order_id: detail.order_id || delivery.order_id,
       });
     } catch (e: any) {
-      Alert.alert('Error', e.message);
+      Alert.alert('Error', friendlyError(e));
       setDetailModal(false);
     } finally {
       setDetailLoading(false);
@@ -398,7 +399,7 @@ export default function DriverDashboardScreen() {
       const detail = response.data?.data || response.data;
       setMapDelivery({ ...detail, source: delivery?.source });
     } catch (e: any) {
-      Alert.alert('Error', e.message);
+      Alert.alert('Error', friendlyError(e));
       setMapModal(false);
     } finally {
       setDetailLoading(false);
@@ -472,7 +473,7 @@ export default function DriverDashboardScreen() {
               loadDeliveries(driverId);
               if (detailModal && selectedDelivery?.id === delivery.id) openDetail(delivery);
             } catch (e: any) {
-              Alert.alert('Error', e?.response?.data?.error || e.message || 'Could not accept delivery.');
+              Alert.alert('Error', friendlyError(e, 'Could not accept delivery.'));
             }
           },
         },
@@ -520,7 +521,7 @@ export default function DriverDashboardScreen() {
               Alert.alert('✅ Updated', `Status: ${nextStatus.replace(/_/g, ' ')}`);
               loadDeliveries(driverId);
               if (detailModal && selectedDelivery?.id === delivery.id) openDetail(delivery);
-            } catch (e: any) { Alert.alert('Error', e?.response?.data?.error || e.message); }
+            } catch (e: any) { Alert.alert('Error', friendlyError(e)); }
           },
         },
       ],
@@ -540,7 +541,7 @@ export default function DriverDashboardScreen() {
         : await generateDeliveryOTP(String(delivery.id));
       setOtpModal(true);
     } catch (e: any) {
-      Alert.alert('Error', e.message || 'Could not generate OTP');
+      Alert.alert('Error', friendlyError(e, 'Could not generate OTP'));
     } finally {
       setOtpLoading(false);
     }
@@ -571,7 +572,7 @@ export default function DriverDashboardScreen() {
         [{ text: 'View Earnings', style: 'default' }]
       );
     } catch (e: any) {
-      Alert.alert('❌ Wrong OTP', e.message || 'Incorrect code. Ask customer again.');
+      Alert.alert('❌ Wrong OTP', friendlyError(e, 'Incorrect code. Ask customer again.'));
     } finally {
       setOtpLoading(false);
     }

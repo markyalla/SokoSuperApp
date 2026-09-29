@@ -10,6 +10,7 @@ import TextRecognition from '@react-native-ml-kit/text-recognition';
 import { accountService } from '../../src/store/accountService';
 import { useAuthStore } from '../../src/store/authStore';
 import { API_BASE_URL } from '../../src/config/api';
+import { friendlyError } from '../../src/utils/friendlyError';
 
 // Strips everything but letters/digits and uppercases, so dashes, spaces, and
 // minor OCR noise don't cause false mismatches when comparing ID numbers.
@@ -144,7 +145,7 @@ export default function KYCSubmissionScreen() {
         "Thanks! We're reviewing your details. You'll be notified once your identity is verified.",
       );
     } catch (error: any) {
-      Alert.alert('Submission failed', error.response?.data?.error || error.message || 'Try again later.');
+      Alert.alert('Submission failed', friendlyError(error, 'Try again later.'));
     } finally {
       setLoading(false);
     }

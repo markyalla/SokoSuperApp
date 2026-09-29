@@ -7,6 +7,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { getMyArtisanProfile, listMyPortfolio, initializeSokoIndexPayment, verifySokoIndexPayment, getSokoIndexFeatureFlags } from '../../../src/api';
 import { ArtisanProfile, Portfolio } from '../../../src/types/sokoindex';
 import PaystackModal from '../../../src/components/PaystackModal';
+import { friendlyError } from '../../../src/utils/friendlyError';
 
 const STATUS_COLOR: Record<string, string> = { pending: '#d97706', approved: '#16a34a', rejected: '#dc2626' };
 
@@ -49,7 +50,7 @@ export default function MyPortfolioScreen() {
       setPaymentRef(res.data.reference);
       setCheckoutUrl(res.data.checkout_url);
     } catch (e: any) {
-      Alert.alert('Error', e.response?.data?.error || 'Could not start payment');
+      Alert.alert('Error', friendlyError(e, 'Could not start payment'));
       setPaying(false);
     }
   };

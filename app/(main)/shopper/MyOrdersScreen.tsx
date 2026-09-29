@@ -6,6 +6,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { wsService } from '../../../src/services/websocket';
+import { friendlyError } from '../../../src/utils/friendlyError';
 
 interface Order {
   order_id: string;
@@ -119,7 +120,7 @@ export default function MyOrdersScreen() {
       const response = await getOrders();
       setOrders(response.data);
     } catch (e: any) {
-      Alert.alert('Error', e.message);
+      Alert.alert('Error', friendlyError(e));
     } finally {
       setLoading(false);
     }
@@ -141,7 +142,7 @@ export default function MyOrdersScreen() {
             await cancelOrder(String(orderId));
             Alert.alert('Success', 'Order cancelled successfully.');
             loadOrders();
-          } catch (e: any) { Alert.alert('Error', e.message); }
+          } catch (e: any) { Alert.alert('Error', friendlyError(e)); }
         },
       },
     ]);
@@ -162,7 +163,7 @@ export default function MyOrdersScreen() {
               Alert.alert('Refund Initiated', 'Your refund has been submitted. The money will arrive on your mobile money within 1–3 business days.');
               loadOrders();
             } catch (e: any) {
-              Alert.alert('Refund Failed', e?.response?.data?.error || e.message || 'Something went wrong. Please try again.');
+              Alert.alert('Refund Failed', friendlyError(e, 'Something went wrong. Please try again.'));
             }
           },
         },
@@ -184,7 +185,7 @@ export default function MyOrdersScreen() {
               await deleteOrder(orderId);
               setOrders(prev => prev.filter(o => o.order_id !== orderId));
             } catch (e: any) {
-              Alert.alert('Error', e?.response?.data?.error || e.message || 'Could not remove order.');
+              Alert.alert('Error', friendlyError(e, 'Could not remove order.'));
             }
           },
         },

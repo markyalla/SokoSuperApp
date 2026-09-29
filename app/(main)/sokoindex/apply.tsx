@@ -7,6 +7,7 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { applyAsArtisan } from '../../../src/api';
 import { useAuthStore } from '../../../src/store/authStore';
+import { friendlyError } from '../../../src/utils/friendlyError';
 
 // Grouped by trade family so the picker reads as sections rather than one long
 // alphabetical dump. Presented as a modal (not inline chips) since the list is broad.
@@ -102,7 +103,7 @@ export default function ApplyArtisanScreen() {
         { text: 'OK', onPress: () => router.back() },
       ]);
     } catch (e: any) {
-      Alert.alert('Failed', e.response?.data?.error || 'Could not submit application');
+      Alert.alert('Failed', friendlyError(e, 'Could not submit application'));
     } finally {
       setLoading(false);
     }

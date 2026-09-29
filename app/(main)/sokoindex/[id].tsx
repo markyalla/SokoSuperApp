@@ -10,6 +10,7 @@ import { getArtisanDetail, createSokoIndexBooking, initializeSokoIndexPayment, v
 import { ArtisanProfile, Portfolio } from '../../../src/types/sokoindex';
 import ImagePreviewModal from '../../../src/components/ImagePreviewModal';
 import PaystackModal from '../../../src/components/PaystackModal';
+import { friendlyError } from '../../../src/utils/friendlyError';
 
 // Best-effort device location capture for the booking — failures here must
 // never block the booking itself, so any error just omits the location.
@@ -87,7 +88,7 @@ export default function ArtisanDetailScreen() {
         { text: 'OK' },
       ]);
     } catch (e: any) {
-      Alert.alert('Failed', e.response?.data?.error || 'Could not create booking');
+      Alert.alert('Failed', friendlyError(e, 'Could not create booking'));
     } finally {
       setSubmitting(false);
     }
@@ -100,7 +101,7 @@ export default function ArtisanDetailScreen() {
       setPaymentRef(res.data.reference);
       setCheckoutUrl(res.data.checkout_url);
     } catch (e: any) {
-      Alert.alert('Error', e.response?.data?.error || 'Could not start payment');
+      Alert.alert('Error', friendlyError(e, 'Could not start payment'));
       setPaying(false);
     }
   };

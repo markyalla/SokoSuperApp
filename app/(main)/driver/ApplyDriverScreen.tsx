@@ -6,6 +6,7 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { applyDriver } from '../../../src/api';
+import { friendlyError } from '../../../src/utils/friendlyError';
 
 export default function ApplyDriverScreen() {
   const router = useRouter();
@@ -34,7 +35,7 @@ export default function ApplyDriverScreen() {
         { text: 'OK', onPress: () => router.back() }
       ]);
     } catch (e: any) {
-      Alert.alert('Failed', e.response?.data?.error || 'Could not submit application');
+      Alert.alert('Failed', friendlyError(e, 'Could not submit application'));
     } finally {
       setLoading(false);
     }

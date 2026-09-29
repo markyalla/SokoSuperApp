@@ -14,6 +14,7 @@ import {
 import { SokoIndexBooking } from '../../../../src/types/sokoindex';
 import PaystackModal from '../../../../src/components/PaystackModal';
 import ImagePreviewModal from '../../../../src/components/ImagePreviewModal';
+import { friendlyError } from '../../../../src/utils/friendlyError';
 
 const STATUS_COLOR: Record<string, string> = {
   pending: '#d97706', accepted: '#2563eb', awaiting_confirmation: '#0891b2',
@@ -55,7 +56,7 @@ export default function BookingDetailScreen() {
   const withBusy = async (fn: () => Promise<any>) => {
     setBusy(true);
     try { await fn(); await fetchBooking(); }
-    catch (e: any) { Alert.alert('Error', e.response?.data?.error || 'Action failed'); }
+    catch (e: any) { Alert.alert('Error', friendlyError(e, 'Action failed')); }
     finally { setBusy(false); }
   };
 
@@ -95,7 +96,7 @@ export default function BookingDetailScreen() {
       setPaymentRef(res.data.reference);
       setCheckoutUrl(res.data.checkout_url);
     } catch (e: any) {
-      Alert.alert('Error', e.response?.data?.error || 'Could not start payment');
+      Alert.alert('Error', friendlyError(e, 'Could not start payment'));
       setPaying(false);
     }
   };

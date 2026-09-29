@@ -7,6 +7,7 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { accountService } from '../../src/store/accountService';
 import { useAuthStore } from '../../src/store/authStore';
+import { friendlyError } from '../../src/utils/friendlyError';
 
 export default function LoginScreen() {
   const router = useRouter();
@@ -65,7 +66,7 @@ export default function LoginScreen() {
         Alert.alert('Verify your email', data.error || `We've sent a new code to ${data.email}.`);
         return;
       }
-      Alert.alert('Login failed', error.response?.data?.error || 'Please check your credentials and try again.');
+      Alert.alert('Login failed', friendlyError(error, 'Please check your credentials and try again.'));
     } finally {
       setLoading(false);
     }
@@ -76,7 +77,7 @@ export default function LoginScreen() {
       const res = await accountService.ping();
       Alert.alert('Backend reachable', `Status: ${res.status}`);
     } catch (err: any) {
-      Alert.alert('Backend unreachable', err?.message || 'Network error');
+      Alert.alert('Backend unreachable', friendlyError(err, 'Network error'));
     }
   };
 

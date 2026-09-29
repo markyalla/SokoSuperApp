@@ -9,6 +9,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { createPortfolioItem, updatePortfolioItem, listMyPortfolio } from '../../../src/api';
 import { useAuthStore } from '../../../src/store/authStore';
 import { API_BASE_URL } from '../../../src/config/api';
+import { friendlyError } from '../../../src/utils/friendlyError';
 
 // Creating a brand-new portfolio item always happens from here via SokoIndex.
 // Editing an existing item (from SokoAccount) passes ?id=<portfolioId> to
@@ -88,7 +89,7 @@ export default function CreatePortfolioScreen() {
       setImages((prev) => { const next = [...prev] as [string, string, string, string]; next[slot] = json.path; return next; });
       setPreviews((prev) => { const next = [...prev] as [string, string, string, string]; next[slot] = json.url; return next; });
     } catch (e: any) {
-      Alert.alert('Upload failed', e.message || 'Could not upload image.');
+      Alert.alert('Upload failed', friendlyError(e, 'Could not upload image.'));
     } finally {
       setUploadingSlot(null);
     }
@@ -121,7 +122,7 @@ export default function CreatePortfolioScreen() {
         ]);
       }
     } catch (e: any) {
-      Alert.alert('Failed', e.response?.data?.error || 'Could not save portfolio item');
+      Alert.alert('Failed', friendlyError(e, 'Could not save portfolio item'));
     } finally {
       setSubmitting(false);
     }

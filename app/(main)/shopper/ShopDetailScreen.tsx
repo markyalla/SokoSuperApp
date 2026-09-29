@@ -11,6 +11,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { getStore, getStoreProducts } from '../../../src/api';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import Toast from '../../../src/components/Toast';
+import { friendlyError } from '../../../src/utils/friendlyError';
 
 interface Product {
   id: string | number;
@@ -164,7 +165,7 @@ export default function ShopDetailScreen() {
       setStore(storeRes.data);
       setProducts(productsRes.data);
     } catch (e: any) {
-      Alert.alert('Error', e.message);
+      Alert.alert('Error', friendlyError(e));
     } finally {
       setLoading(false);
     }

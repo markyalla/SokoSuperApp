@@ -8,6 +8,7 @@ import * as ImagePicker from 'expo-image-picker';
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import { Ionicons } from '@expo/vector-icons';
 import { accountService } from '../../src/store/accountService';
+import { friendlyError } from '../../src/utils/friendlyError';
 
 const GENDER_OPTIONS = [
   { label: 'Male', value: 'male' },
@@ -187,7 +188,7 @@ export default function RegisterScreen() {
         `We've sent a 6-digit verification code to ${verifyEmail}. Enter it to finish setting up your account.`,
       );
     } catch (error: any) {
-      Alert.alert('Registration Failed', error?.response?.data?.error || error?.message || 'Please review your details.');
+      Alert.alert('Registration Failed', friendlyError(error, 'Please review your details.'));
     } finally {
       setLoading(false);
     }

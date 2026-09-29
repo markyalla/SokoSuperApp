@@ -13,6 +13,7 @@ import { shopperApi } from '../../../src/api/shopper';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import Toast from '../../../src/components/Toast';
+import { friendlyError } from '../../../src/utils/friendlyError';
 
 const { height: SCREEN_H, width: SCREEN_W } = Dimensions.get('window');
 
@@ -309,7 +310,7 @@ export default function ShopsScreen() {
         }
       }
     } catch (e: any) {
-      Alert.alert('Error', e.message);
+      Alert.alert('Error', friendlyError(e));
     }
   };
 

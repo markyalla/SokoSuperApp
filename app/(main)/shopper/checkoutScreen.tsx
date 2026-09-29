@@ -13,6 +13,7 @@ import { createOrder, payOrder, getDeliveryFee, verifyPayment } from '../../../s
 import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { friendlyError } from '../../../src/utils/friendlyError';
 
 export default function CheckoutScreen() {
   const router = useRouter();
@@ -187,7 +188,7 @@ export default function CheckoutScreen() {
         setPaystackModal(true);
         setLoading(false);
       } catch (e: any) {
-        Alert.alert('Error', e.message || 'Failed to initialize payment');
+        Alert.alert('Error', friendlyError(e, 'Failed to initialize payment'));
         setPaymentStep('form');
       } finally {
         setLoading(false);

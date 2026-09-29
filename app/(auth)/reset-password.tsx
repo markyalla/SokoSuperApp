@@ -6,6 +6,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { API_BASE_URL } from '../../src/config/api';
+import { friendlyError } from '../../src/utils/friendlyError';
 
 export default function ResetPasswordScreen() {
   const router = useRouter();
@@ -53,7 +54,7 @@ export default function ResetPasswordScreen() {
         [{ text: 'Login', onPress: () => router.replace('/(auth)/login') }],
       );
     } catch (err: any) {
-      Alert.alert('Error', err.message || 'Something went wrong.');
+      Alert.alert('Error', friendlyError(err, 'Something went wrong.'));
     } finally {
       setLoading(false);
     }

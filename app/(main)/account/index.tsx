@@ -10,6 +10,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { API_BASE_URL } from '../../../src/config/api';
 import { updateProfile, deleteAccount } from '../../../src/api';
 import { useAuthedImage } from '../../../src/hooks/useAuthedImage';
+import { friendlyError } from '../../../src/utils/friendlyError';
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -205,7 +206,7 @@ export default function AccountScreen() {
       await updateProfile({ profile_image_url: json.path });
       await updateUser({ profile_image_url: json.url });
     } catch (e: any) {
-      Alert.alert('Upload failed', e.message || 'Could not update your profile photo.');
+      Alert.alert('Upload failed', friendlyError(e, 'Could not update your profile photo.'));
     } finally {
       setAvatarUploading(false);
     }
@@ -229,7 +230,7 @@ export default function AccountScreen() {
       Alert.alert('Account deleted', 'Your account and personal data have been deleted.');
       router.replace('/(auth)/login');
     } catch (e: any) {
-      Alert.alert('Could not delete account', e?.response?.data?.error || e.message || 'Please try again.');
+      Alert.alert('Could not delete account', friendlyError(e, 'Please try again.'));
     } finally {
       setDeleting(false);
       setDeletePassword('');
