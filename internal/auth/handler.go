@@ -819,7 +819,7 @@ func ForgotPassword(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		// Send email (best-effort — don't fail the request if email is misconfigured)
-		go utils.SendEmail(
+		utils.SendEmailAsync(
 			req.Email,
 			"Your SokoApp password reset code",
 			utils.OTPEmailBody(otp, user.FullName),

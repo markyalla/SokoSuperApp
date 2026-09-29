@@ -48,7 +48,7 @@ func issueEmailVerificationOTP(db *gorm.DB, user models.User) error {
 	}
 
 	// Best-effort, like forgot-password — the user can always tap Resend.
-	go utils.SendEmail(
+	utils.SendEmailAsync(
 		user.Email,
 		"Your SokoApp verification code",
 		utils.VerificationEmailBody(otp, user.FullName),
