@@ -15,13 +15,15 @@ import { API_BASE_URL } from '../../src/config/api';
 // minor OCR noise don't cause false mismatches when comparing ID numbers.
 const normalizeId = (s: string) => s.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
 
+// placeholder/hint follow the selected type so the example matches the card
+// the user is actually holding (Ghana formats — the primary market).
 const ID_TYPE_OPTIONS = [
-  { label: 'National ID',      value: 'national_id',     icon: 'card-outline' },
-  { label: 'NHIA Card',        value: 'nhia_id',          icon: 'medical-outline' },
-  { label: 'Voter ID',         value: 'voter_id',         icon: 'checkmark-circle-outline' },
-  { label: 'TIN',              value: 'tin',              icon: 'receipt-outline' },
-  { label: 'Passport',         value: 'passport',         icon: 'airplane-outline' },
-  { label: "Driver's License", value: 'drivers_license',  icon: 'car-outline' },
+  { label: 'National ID',         value: 'national_id',     icon: 'card-outline',             placeholder: 'GHA-123456789-0', hint: 'Ghana Card number, printed under your photo' },
+  { label: 'NHIA ID',             value: 'nhia_id',         icon: 'medical-outline',          placeholder: '12345678',        hint: 'Health insurance (NHIS) membership number' },
+  { label: 'Voter ID',            value: 'voter_id',        icon: 'checkmark-circle-outline', placeholder: '1234567890',      hint: '10-digit number on your voter ID card' },
+  { label: 'Tax ID (TIN)',        value: 'tin',             icon: 'receipt-outline',          placeholder: 'P0012345678',     hint: 'Taxpayer Identification Number from the Ghana Revenue Authority' },
+  { label: 'Passport ID',         value: 'passport',        icon: 'airplane-outline',         placeholder: 'G1234567',        hint: 'Passport number, top right of the photo page' },
+  { label: "Driver's License ID", value: 'drivers_license', icon: 'car-outline',              placeholder: 'ABC-12345678-12345', hint: 'Licence number on the front of your DVLA card' },
 ];
 
 export default function KYCSubmissionScreen() {
@@ -149,6 +151,7 @@ export default function KYCSubmissionScreen() {
   };
 
   const busy = uploading || loading;
+  const selectedIdType = ID_TYPE_OPTIONS.find((o) => o.value === idType) ?? ID_TYPE_OPTIONS[0];
 
   const handleBack = () => {
     if (tokens?.access) {
@@ -179,9 +182,9 @@ export default function KYCSubmissionScreen() {
           <Text style={styles.formSubtitle}>Verify your identity to access all SokoApp features</Text>
 
           {/* ID Type */}
-          <Text style={styles.sectionDivider}>Document Details</Text>
+          <Text style={styles.sectionDivider}>DOCUMENT DETAILS</Text>
           <View style={styles.fieldGroup}>
-            <Text style={styles.label}>Identification Type <Text style={styles.req}>*</Text></Text>
+            <Text style={styles.label}>IDENTIFICATION TYPE <Text style={styles.req}>*</Text></Text>
             <View style={styles.chipGrid}>
               {ID_TYPE_OPTIONS.map((opt) => (
                 <TouchableOpacity
@@ -205,23 +208,25 @@ export default function KYCSubmissionScreen() {
 
           {/* ID Number */}
           <View style={styles.fieldGroup}>
-            <Text style={styles.label}>ID Number <Text style={styles.req}>*</Text></Text>
+            <Text style={styles.label}>{selectedIdType.label.toUpperCase()} NUMBER <Text style={styles.req}>*</Text></Text>
             <View style={styles.inputWrap}>
-              <Ionicons name="card-outline" size={17} color="#aaa" style={styles.icon} />
+              <Ionicons name={selectedIdType.icon as any} size={17} color="#aaa" style={styles.icon} />
               <TextInput
                 value={idNumber}
                 onChangeText={setIdNumber}
                 style={styles.input}
-                placeholder="GHA-70000000-0"
+                placeholder={selectedIdType.placeholder}
                 placeholderTextColor="#bbb"
                 autoCapitalize="characters"
+                autoCorrect={false}
               />
             </View>
+            <Text style={styles.fieldHint}>{selectedIdType.hint}</Text>
           </View>
 
           {/* ID Image */}
           <View style={styles.fieldGroup}>
-            <Text style={styles.label}>Front Photo of ID <Text style={styles.req}>*</Text></Text>
+            <Text style={styles.label}>FRONT PHOTO OF ID <Text style={styles.req}>*</Text></Text>
             <TouchableOpacity style={styles.imageUploadBox} onPress={pickIDImage} activeOpacity={0.8}>
               {idImage ? (
                 <Image source={{ uri: idImage.uri }} style={styles.idImagePreview} resizeMode="cover" />
@@ -265,9 +270,9 @@ export default function KYCSubmissionScreen() {
           </View>
 
           {/* Address */}
-          <Text style={styles.sectionDivider}>Address Information</Text>
+          <Text style={styles.sectionDivider}>ADDRESS INFORMATION</Text>
           <View style={styles.fieldGroup}>
-            <Text style={styles.label}>Resident Address <Text style={styles.req}>*</Text></Text>
+            <Text style={styles.label}>RESIDENTIAL ADDRESS <Text style={styles.req}>*</Text></Text>
             <View style={styles.inputWrap}>
               <Ionicons name="location-outline" size={17} color="#aaa" style={styles.icon} />
               <TextInput
@@ -282,13 +287,13 @@ export default function KYCSubmissionScreen() {
 
           <View style={styles.row}>
             <View style={[styles.fieldGroup, { flex: 1 }]}>
-              <Text style={styles.label}>City <Text style={styles.req}>*</Text></Text>
+              <Text style={styles.label}>CITY <Text style={styles.req}>*</Text></Text>
               <View style={styles.inputWrap}>
                 <TextInput value={city} onChangeText={setCity} style={styles.input} placeholder="Koforidua" placeholderTextColor="#bbb" />
               </View>
             </View>
             <View style={[styles.fieldGroup, { flex: 1 }]}>
-              <Text style={styles.label}>Country <Text style={styles.req}>*</Text></Text>
+              <Text style={styles.label}>COUNTRY <Text style={styles.req}>*</Text></Text>
               <View style={styles.inputWrap}>
                 <TextInput value={country} onChangeText={setCountry} style={styles.input} placeholder="Ghana" placeholderTextColor="#bbb" />
               </View>
@@ -336,18 +341,23 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255,255,255,0.35)', alignItems: 'center',
     justifyContent: 'center', marginBottom: 10,
   },
-  brand:   { fontSize: 22, fontWeight: '600', color: '#fff' },
-  tagline: { fontSize: 12, color: 'rgba(255,255,255,0.7)', marginTop: 3 },
+  // Full-width + centred rather than shrink-wrapped: some Android system
+  // fonts under-measure shrink-wrapped text and drop the last word.
+  brand:   { alignSelf: 'stretch', textAlign: 'center', fontSize: 22, fontWeight: '600', color: '#fff' },
+  tagline: { alignSelf: 'stretch', textAlign: 'center', fontSize: 13, color: 'rgba(255,255,255,0.85)', marginTop: 3, paddingHorizontal: 24 },
   form:    { padding: 20, paddingTop: 24 },
   formTitle:    { fontSize: 22, fontWeight: '700', color: '#1a1a1a', marginBottom: 4 },
   formSubtitle: { fontSize: 13, color: '#888', marginBottom: 22 },
   sectionDivider: {
-    fontSize: 11, fontWeight: '600', color: '#aaa', textTransform: 'uppercase',
+    fontSize: 11, fontWeight: '600', color: '#aaa',
     letterSpacing: 0.5, marginBottom: 14, marginTop: 12,
     paddingBottom: 6, borderBottomWidth: 0.5, borderBottomColor: '#eee',
   },
   fieldGroup: { marginBottom: 14 },
-  label: { fontSize: 11, fontWeight: '600', color: '#aaa', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 6 },
+  // Labels are written in capitals in the JSX — textTransform: 'uppercase'
+  // makes Android measure the lowercase width and clip the last word.
+  label: { fontSize: 11, fontWeight: '600', color: '#aaa', letterSpacing: 0.4, marginBottom: 6 },
+  fieldHint: { fontSize: 12, color: '#999', marginTop: 6, lineHeight: 16 },
   req:   { color: '#D85A30' },
   inputWrap: {
     flexDirection: 'row', alignItems: 'center', backgroundColor: '#f7f7f7',
@@ -365,7 +375,7 @@ const styles = StyleSheet.create({
     borderRadius: 12, borderWidth: 1, borderColor: '#e0e0e0', backgroundColor: '#f7f7f7',
   },
   chipActive:     { backgroundColor: '#FF8000', borderColor: '#FF8000' },
-  chipText:       { fontSize: 13, color: '#555' },
+  chipText:       { flexShrink: 1, fontSize: 13, color: '#555' },
   chipTextActive: { color: '#fff', fontWeight: '500' },
 
   // ID image upload
