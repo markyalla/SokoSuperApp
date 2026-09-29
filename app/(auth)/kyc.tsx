@@ -137,6 +137,10 @@ export default function KYCSubmissionScreen() {
       });
       await setKycStatus('submitted');
       router.replace('/home' as any);
+      Alert.alert(
+        'Verification submitted ✅',
+        "Thanks! We're reviewing your details. You'll be notified once your identity is verified.",
+      );
     } catch (error: any) {
       Alert.alert('Submission failed', error.response?.data?.error || error.message || 'Try again later.');
     } finally {
@@ -303,8 +307,8 @@ export default function KYCSubmissionScreen() {
             </TouchableOpacity>
           )}
 
-          <TouchableOpacity style={styles.backLink} onPress={() => router.replace('/(auth)/login')}>
-            <Text style={styles.backLinkText}>Return to Login</Text>
+          <TouchableOpacity style={styles.backLink} onPress={handleBack}>
+            <Text style={styles.backLinkText}>{tokens?.access ? 'Skip for now' : 'Return to Login'}</Text>
           </TouchableOpacity>
         </View>
       </ScrollView>

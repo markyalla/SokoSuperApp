@@ -6,13 +6,19 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { API_BASE_URL } from '../../src/config/api';
+import { accountService } from '../../src/store/accountService';
+import { useAuthStore } from '../../src/store/authStore';
 
 const OTP_LENGTH = 6;
 
 export default function VerifyOTPScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { email } = useLocalSearchParams<{ email: string }>();
+  // mode=register: verifying a new sign-up (success logs in).
+  // Otherwise: the forgot-password flow (success leads to reset-password).
+  const { email, mode } = useLocalSearchParams<{ email: string; mode?: string }>();
+  const isSignup = mode === 'register';
+  const { setAuth } = useAuthStore();
 
   const [digits, setDigits]   = useState<string[]>(Array(OTP_LENGTH).fill(''));
   const [loading, setLoading] = useState(false);
@@ -43,6 +49,35 @@ export default function VerifyOTPScreen() {
       return;
     }
     setLoading(true);
+    if (isSignup) {
+      try {
+        const res = await accountService.verifyEmail(email, otp);
+        await setAuth(res.tokens, res.user, res.kyc_status);
+        router.replace('/home');
+        const kycDone = res.kyc_status === 'approved' || res.kyc_status === 'submitted';
+        setTimeout(() => {
+          Alert.alert(
+            'Email verified ✅',
+            kycDone
+              ? 'Welcome to MySokoApp! Your account is ready.'
+              : "Welcome to MySokoApp! Explore the apps — to place orders, book deliveries or hire artisans you'll need to verify your identity.",
+            kycDone
+              ? [{ text: 'OK' }]
+              : [
+                  { text: 'Later', style: 'cancel' },
+                  { text: 'Verify now', onPress: () => router.push('/(auth)/kyc' as any) },
+                ],
+          );
+        }, 400);
+      } catch (err: any) {
+        setDigits(Array(OTP_LENGTH).fill(''));
+        inputs.current[0]?.focus();
+        Alert.alert('Invalid Code', err?.response?.data?.error || err?.message || 'Please try again.');
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
     try {
       const res  = await fetch(`${API_BASE_URL}/auth/verify-otp`, {
         method: 'POST',
@@ -63,11 +98,15 @@ export default function VerifyOTPScreen() {
   const handleResend = async () => {
     setResending(true);
     try {
-      await fetch(`${API_BASE_URL}/auth/forgot-password`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email }),
-      });
+      if (isSignup) {
+        await accountService.resendVerification(email);
+      } else {
+        await fetch(`${API_BASE_URL}/auth/forgot-password`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email }),
+        });
+      }
       setDigits(Array(OTP_LENGTH).fill(''));
       inputs.current[0]?.focus();
       Alert.alert('Sent', 'A new code has been sent to your email.');
@@ -88,13 +127,16 @@ export default function VerifyOTPScreen() {
         <StatusBar barStyle="light-content" backgroundColor="#FF8000" />
 
         <View style={[styles.topSection, { paddingTop: insets.top + 16 }]}>
-          <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
+          <TouchableOpacity
+            style={styles.backBtn}
+            onPress={() => (router.canGoBack() ? router.back() : router.replace('/login'))}
+          >
             <Ionicons name="arrow-back" size={22} color="#fff" />
           </TouchableOpacity>
           <View style={styles.logoBox}>
             <Ionicons name="keypad-outline" size={28} color="#fff" />
           </View>
-          <Text style={styles.brand}>Enter OTP</Text>
+          <Text style={styles.brand}>{isSignup ? 'Verify your email' : 'Enter OTP'}</Text>
           <Text style={styles.tagline}>Code sent to {email}</Text>
         </View>
 

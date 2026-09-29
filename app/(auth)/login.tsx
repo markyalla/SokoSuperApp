@@ -26,10 +26,23 @@ export default function LoginScreen() {
     try {
       const res = await accountService.login(identifier, password);
       await setAuth(res.tokens, res.user, res.kyc_status);
+      router.replace('/home');
+      // Everyone lands on home and can browse the apps; identity verification
+      // is prompted for (not forced) until it's done.
       if (res.kyc_status === 'pending' || res.kyc_status === 'rejected') {
-        router.replace('/kyc');
+        setTimeout(() => {
+          Alert.alert(
+            res.kyc_status === 'rejected' ? 'Verification needs attention' : 'Verify your identity',
+            res.kyc_status === 'rejected'
+              ? 'Your identity verification was not approved. Please resubmit to place orders, book deliveries or hire artisans.'
+              : 'To place orders, book deliveries or hire artisans, complete your identity verification.',
+            [
+              { text: 'Later', style: 'cancel' },
+              { text: 'Verify now', onPress: () => router.push('/(auth)/kyc' as any) },
+            ],
+          );
+        }, 600);
       } else {
-        router.replace('/home');
         const isDriver = res.user?.roles?.includes('driver');
         if (isDriver) {
           setTimeout(() => {
@@ -45,6 +58,13 @@ export default function LoginScreen() {
         }
       }
     } catch (error: any) {
+      const data = error.response?.data;
+      if (data?.requires_verification && data?.email) {
+        // Registered but never entered the sign-up code — the server has just emailed a fresh one.
+        router.push({ pathname: '/(auth)/verify-otp', params: { email: data.email, mode: 'register' } });
+        Alert.alert('Verify your email', data.error || `We've sent a new code to ${data.email}.`);
+        return;
+      }
       Alert.alert('Login failed', error.response?.data?.error || 'Please check your credentials and try again.');
     } finally {
       setLoading(false);

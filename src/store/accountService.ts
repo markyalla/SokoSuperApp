@@ -18,6 +18,13 @@ export interface RegisterRequest {
   };
 }
 
+export interface RegisterResponse {
+  message: string;
+  requires_verification: boolean;
+  email: string;
+  id: string;
+}
+
 export const accountService = {
   ping: async () => {
     return apiClient.get('/health');
@@ -31,7 +38,7 @@ export const accountService = {
     return response.data;
   },
 
-  register: async (data: RegisterRequest): Promise<AuthResponse> => {
+  register: async (data: RegisterRequest): Promise<RegisterResponse> => {
     const formData = new FormData();
 
     formData.append('full_name', data.full_name);
@@ -58,7 +65,7 @@ export const accountService = {
     }
 
     try {
-      const response = await apiClient.post<AuthResponse>('/auth/register', formData, {
+      const response = await apiClient.post<RegisterResponse>('/auth/register', formData, {
         headers: {
           // Explicitly set multipart so Axios includes the boundary.
           // This overrides any default 'application/json' on the apiClient instance.
@@ -75,6 +82,16 @@ export const accountService = {
       });
       throw error;
     }
+  },
+
+  // Checks the sign-up code; a match logs the user in (returns tokens).
+  verifyEmail: async (email: string, otp: string): Promise<AuthResponse> => {
+    const response = await apiClient.post<AuthResponse>('/auth/verify-email', { email, otp });
+    return response.data;
+  },
+
+  resendVerification: async (email: string) => {
+    return apiClient.post('/auth/resend-verification', { email });
   },
 
   submitKYC: async (token: string, data: KYCSubmissionRequest): Promise<any> => {

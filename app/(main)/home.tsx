@@ -14,7 +14,7 @@ const APPS = [
     subtitle: 'Profile',
     features: ['View & update Profile', 'Security settings', 'Notifications', 'Linked accounts'],
     featureIcons: ['id-card-outline', 'shield-checkmark-outline', 'notifications-outline', 'link-outline'],
-    featureRoutes: ['/account', '/account', '/account', '/account'],
+    featureRoutes: ['/account', '/kyc', '/account', '/account'],
     btnColor: '#FF8000',
   },
   {
@@ -69,7 +69,9 @@ const APPS = [
 export default function HomeScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { user, logout, clearAuth } = useAuthStore() as any;
+  const { user, kycStatus, logout, clearAuth } = useAuthStore() as any;
+  const kycState = String(kycStatus ?? '').toLowerCase();
+  const needsKyc = !kycState || kycState === 'pending' || kycState === 'rejected';
   const [selectedApp, setSelectedApp] = useState<typeof APPS[0] | null>(null);
 
   const handleLogout = async () => {
@@ -152,6 +154,25 @@ export default function HomeScreen() {
             ))}
           </View>
         </View>
+
+        {/* Identity verification prompt — apps stay browsable, but ordering,
+            deliveries and bookings need a verified identity. */}
+        {needsKyc && (
+          <TouchableOpacity
+            style={styles.kycBanner}
+            onPress={() => router.push('/kyc')}
+            activeOpacity={0.9}
+          >
+            <Ionicons name="shield-checkmark-outline" size={22} color="#FF8000" />
+            <View style={{ flex: 1, marginLeft: 12 }}>
+              <Text style={styles.driverBannerTitle}>
+                {kycState === 'rejected' ? 'Resubmit identity verification' : 'Verify your identity'}
+              </Text>
+              <Text style={styles.driverBannerSub}>Required to order, send packages and book artisans</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color="#FF8000" />
+          </TouchableOpacity>
+        )}
 
         {/* Driver Application Banner */}
         {!isDriver && (
@@ -281,6 +302,7 @@ const styles = StyleSheet.create({
   balanceVal: { fontSize: 22, fontWeight: '800', color: 'black' },
   balanceDivider: { height: 1, backgroundColor: '#F0F0F0', marginTop: 10, marginBottom: 10 },
   driverBanner: { marginHorizontal: 16, marginTop: 16, backgroundColor: 'white', borderRadius: 16, padding: 16, borderWidth: 1, borderColor: '#FF8000' },
+  kycBanner: { marginHorizontal: 16, marginTop: 16, backgroundColor: '#FFF4E8', borderRadius: 16, padding: 16, flexDirection: 'row', alignItems: 'center' },
   driverBannerContent: { flexDirection: 'row', alignItems: 'center' },
   driverBannerIcon: { width: 44, height: 44, borderRadius: 12, backgroundColor: 'white', alignItems: 'center', justifyContent: 'center' },
   driverBannerTitle: { fontSize: 16, fontWeight: '700', color: 'black' },

@@ -10,7 +10,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import MapView, { Marker } from 'react-native-maps';
 import { mapsAvailable } from '../../../src/config/maps';
-import { getOrderDetail, getDeliveryLocation, getCustomerOrderOTP, rateOrderDelivery, fileOrderComplaint } from '../../../src/api';
+import { getOrders, getOrderDetail, getDeliveryLocation, getCustomerOrderOTP, rateOrderDelivery, fileOrderComplaint } from '../../../src/api';
 
 interface Order {
   id: string | number;
@@ -172,12 +172,77 @@ function PrepEtaBanner({ status, estimatedPrepMins, acceptedAt }: {
   );
 }
 
+// Order statuses that still have something to track, most advanced first —
+// used to pick which order to show when this screen is opened without one.
+const TRACKABLE_PRIORITY = [
+  'in_transit', 'picked_up', 'assigned_to_driver', 'ready_for_pickup',
+  'preparing', 'payment_confirmed', 'payment_pending', 'pending',
+];
+
 export default function TrackOrderScreen() {
   const router = useRouter();
-  const insets = useSafeAreaInsets();
   const params = useLocalSearchParams() as any;
-  const { orderId } = params;
-  const showMap = params.showMap === 'true';
+  const [resolvedId, setResolvedId] = useState<string | null>(params.orderId ? String(params.orderId) : null);
+  const [resolving, setResolving] = useState(!params.orderId);
+
+  // Opened from the home screen's "Track order" shortcut there's no orderId —
+  // track the user's current order instead of requesting /orders/undefined.
+  useEffect(() => {
+    if (params.orderId) return;
+    (async () => {
+      try {
+        const res = await getOrders();
+        const orders: any[] = Array.isArray(res.data) ? res.data : [];
+        const rank = (o: any) => {
+          const i = TRACKABLE_PRIORITY.indexOf(String(o.status || '').toLowerCase().replace(/ /g, '_'));
+          return i < 0 ? Infinity : i;
+        };
+        const current = orders
+          .filter((o) => rank(o) !== Infinity)
+          .sort((a, b) => rank(a) - rank(b)
+            || new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
+        if (current) setResolvedId(String(current.order_id ?? current.id));
+      } catch {
+        // Falls through to the "no active order" state below.
+      } finally {
+        setResolving(false);
+      }
+    })();
+  }, [params.orderId]);
+
+  if (resolving) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#FF8000" />
+        <Text style={styles.loadingText}>Finding your current order...</Text>
+      </View>
+    );
+  }
+
+  if (!resolvedId) {
+    return (
+      <View style={styles.loadingContainer}>
+        <Text style={{ fontSize: 44 }}>🛍️</Text>
+        <Text style={styles.noOrderTitle}>No order to track</Text>
+        <Text style={styles.noOrderSub}>You don't have an order in progress right now.</Text>
+        <TouchableOpacity style={styles.emptyBtn} onPress={() => router.replace('/shopper/MyOrdersScreen' as any)}>
+          <Text style={styles.emptyBtnText}>View my orders</Text>
+        </TouchableOpacity>
+        <TouchableOpacity onPress={() => (router.canGoBack() ? router.back() : router.replace('/home'))}>
+          <Text style={styles.emptyLink}>Go back</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  // Without an explicit order the user asked to "track", so open on the map.
+  const showMap = params.orderId ? params.showMap === 'true' : true;
+  return <TrackOrderView key={resolvedId} orderId={resolvedId} showMap={showMap} />;
+}
+
+function TrackOrderView({ orderId, showMap }: { orderId: string; showMap: boolean }) {
+  const router = useRouter();
+  const insets = useSafeAreaInsets();
 
   const [order, setOrder] = useState<Order | null>(null);
   const [delivery, setDelivery] = useState<DeliveryInfo | null>(null);
@@ -930,6 +995,11 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff' },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   loadingText: { marginTop: 12, color: '#888', fontSize: 14 },
+  noOrderTitle: { marginTop: 12, fontSize: 18, fontWeight: '700', color: '#1a1a1a' },
+  noOrderSub: { marginTop: 6, fontSize: 14, color: '#888', textAlign: 'center', paddingHorizontal: 32 },
+  emptyBtn: { marginTop: 20, backgroundColor: '#FF8000', borderRadius: 12, paddingVertical: 12, paddingHorizontal: 28 },
+  emptyBtnText: { color: '#fff', fontWeight: '700', fontSize: 15 },
+  emptyLink: { marginTop: 14, color: '#888', fontSize: 14, textDecorationLine: 'underline' },
   header: {
     backgroundColor: '#FF8000', paddingBottom: 14,
     paddingHorizontal: 16, flexDirection: 'row',

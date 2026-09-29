@@ -8,7 +8,6 @@ import * as ImagePicker from 'expo-image-picker';
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import { Ionicons } from '@expo/vector-icons';
 import { accountService } from '../../src/store/accountService';
-import { useAuthStore } from '../../src/store/authStore';
 
 const GENDER_OPTIONS = [
   { label: 'Male', value: 'male' },
@@ -79,7 +78,6 @@ const AFRICAN_COUNTRIES = [
 export default function RegisterScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { setAuth } = useAuthStore();
 
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
@@ -181,8 +179,13 @@ export default function RegisterScreen() {
         date_of_birth: dateOfBirth || undefined,
         profile_image: profileImage ?? undefined,
       });
-      await setAuth({ access: res.tokens.access, refresh: res.tokens.refresh }, res.user, res.kyc_status);
-      router.replace('/(auth)/kyc');
+      // No session yet — the account is only usable once the emailed code is entered.
+      const verifyEmail = res.email || email.trim();
+      router.replace({ pathname: '/(auth)/verify-otp', params: { email: verifyEmail, mode: 'register' } });
+      Alert.alert(
+        'Registration successful 🎉',
+        `We've sent a 6-digit verification code to ${verifyEmail}. Enter it to finish setting up your account.`,
+      );
     } catch (error: any) {
       Alert.alert('Registration Failed', error?.response?.data?.error || error?.message || 'Please review your details.');
     } finally {
