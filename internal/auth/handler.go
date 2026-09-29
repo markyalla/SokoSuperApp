@@ -6,7 +6,9 @@ import (
 	"crypto/sha256"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"math/big"
 	"net/http"
 	"os"
@@ -18,6 +20,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/go-playground/validator/v10"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
@@ -68,12 +71,21 @@ func Register(db *gorm.DB, store *storage.Client, distributor worker.TaskDistrib
 	return func(c *gin.Context) {
 		var req RegisterRequest
 		if err := c.ShouldBind(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			c.JSON(http.StatusBadRequest, gin.H{"error": registerValidationMessage(err)})
 			return
 		}
+		req.Email = strings.TrimSpace(req.Email)
+		req.PhoneNumber = strings.TrimSpace(req.PhoneNumber)
 
 		if req.Password != req.ConfirmPassword {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Passwords do not match"})
+			return
+		}
+
+		// Checked up front (before any upload) so the user gets a plain
+		// answer instead of the database's unique-constraint error.
+		if msg := existingAccountMessage(db, req.Email, req.PhoneNumber); msg != "" {
+			c.JSON(http.StatusConflict, gin.H{"error": msg})
 			return
 		}
 
@@ -82,7 +94,8 @@ func Register(db *gorm.DB, store *storage.Client, distributor worker.TaskDistrib
 		if err == nil {
 			url, uploadErr := store.UploadFile(file, "profile-images")
 			if uploadErr != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "Profile image upload failed: " + uploadErr.Error()})
+				log.Printf("[register] profile image upload failed for %s: %v", req.Email, uploadErr)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "We couldn't upload your profile photo. Please try again, or register without a photo."})
 				return
 			}
 			profileURL = url
@@ -156,7 +169,13 @@ func Register(db *gorm.DB, store *storage.Client, distributor worker.TaskDistrib
 		})
 
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Registration failed: " + err.Error()})
+			// A sign-up racing another with the same email/phone lands here.
+			if msg := existingAccountMessage(db, req.Email, req.PhoneNumber); msg != "" {
+				c.JSON(http.StatusConflict, gin.H{"error": msg})
+				return
+			}
+			log.Printf("[register] create failed for %s: %v", req.Email, err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "We couldn't create your account right now. Please try again."})
 			return
 		}
 
@@ -178,6 +197,45 @@ func Register(db *gorm.DB, store *storage.Client, distributor worker.TaskDistrib
 			"id":                    user.ID,
 		})
 	}
+}
+
+// existingAccountMessage returns a user-facing message when the email or
+// phone number already belongs to an account, or "" when both are free.
+func existingAccountMessage(db *gorm.DB, email, phone string) string {
+	var emailCount, phoneCount int64
+	db.Model(&models.User{}).Where("LOWER(email) = LOWER(?)", email).Count(&emailCount)
+	db.Model(&models.User{}).Where("phone_number = ?", phone).Count(&phoneCount)
+	switch {
+	case emailCount > 0 && phoneCount > 0:
+		return "You already have an account with this email and phone number. Please log in instead — if you haven't verified your email yet, we'll send you a new code."
+	case emailCount > 0:
+		return "An account with this email already exists. Please log in, or use 'Forgot password?' if you can't remember your password."
+	case phoneCount > 0:
+		return "This phone number is already registered to another account. Please log in, or use a different phone number."
+	}
+	return ""
+}
+
+// registerValidationMessage turns a binding error into a plain sentence for
+// the first field that failed, instead of the validator's internal text.
+func registerValidationMessage(err error) string {
+	var verrs validator.ValidationErrors
+	if !errors.As(err, &verrs) || len(verrs) == 0 {
+		return "Please check your details and try again."
+	}
+	switch verrs[0].Field() {
+	case "Email":
+		return "Please enter a valid email address."
+	case "Password":
+		return "Your password must be at least 8 characters."
+	case "FullName":
+		return "Please enter your full name."
+	case "PhoneNumber":
+		return "Please enter your phone number."
+	case "ConfirmPassword":
+		return "Please confirm your password."
+	}
+	return "Please fill in all required fields."
 }
 
 // ─────────────────────────────────────────────
