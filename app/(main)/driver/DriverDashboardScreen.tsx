@@ -3,6 +3,7 @@ import { View, StyleSheet, TouchableOpacity, ActivityIndicator, Alert, Switch, R
 import { Text } from '../../../src/components/Text';
 import { TextInput } from '../../../src/components/TextInput';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import * as Location from 'expo-location';
 import {
   getDriverDeliveries,
   getDriverOrderDeliveries,
@@ -24,8 +25,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import Toast from '../../../src/components/Toast';
 import { wsService } from '../../../src/services/websocket';
-import MapView, { Marker } from 'react-native-maps';
-import { mapsAvailable } from '../../../src/config/maps';
+import { FullScreenMap } from '../../../src/components/FullScreenMap';
 import { friendlyError } from '../../../src/utils/friendlyError';
 
 // Shopper orders carry the customer's checkout GPS pin as user_latitude/
@@ -406,16 +406,6 @@ export default function DriverDashboardScreen() {
     }
   };
 
-  const openNativeMap = (lat: number, lng: number, label: string) => {
-    const url = Platform.OS === 'ios'
-      ? `maps:0,0?q=${lat},${lng}(${encodeURIComponent(label)})`
-      : `geo:${lat},${lng}?q=${lat},${lng}(${encodeURIComponent(label)})`;
-    Linking.canOpenURL(url).then(supported => {
-      if (supported) Linking.openURL(url);
-      else Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${lat},${lng}`);
-    });
-  };
-
   const handleLogout = () => {
     Alert.alert('Logout', 'Are you sure?', [
       { text: 'Cancel', style: 'cancel' },
@@ -432,8 +422,27 @@ export default function DriverDashboardScreen() {
     ]);
   };
 
+  // Google Play requires an in-app prominent disclosure before the system
+  // background-location prompt; skipped once the permission is already granted.
+  const confirmLocationDisclosure = async () => {
+    const bg = await Location.getBackgroundPermissionsAsync().catch(() => null);
+    if (bg?.status === 'granted') return true;
+    return new Promise<boolean>((resolve) =>
+      Alert.alert(
+        'Location access',
+        'MySokoApp collects location data to share your live position with customers and admins, assign you nearby deliveries and track orders in real time — even when the app is closed or not in use — while you are Online.\n\nLocation is only collected while you are Online. Go Offline at any time to stop it.',
+        [
+          { text: 'No thanks', style: 'cancel', onPress: () => resolve(false) },
+          { text: 'Continue', onPress: () => resolve(true) },
+        ],
+        { cancelable: false }
+      )
+    );
+  };
+
   const toggleLocationSharing = async (value: boolean) => {
     if (value) {
+      if (!(await confirmLocationDisclosure())) return;
       const started = await startSharing();
       if (!started) {
         Alert.alert('Permission Denied', 'Location permission is required.');
@@ -1291,167 +1300,21 @@ export default function DriverDashboardScreen() {
         </View>
       </Modal>
 
-      {/* ── MAP MODAL ── */}
-      {/* Rendered as a plain absolutely-positioned overlay instead of RN's
-          <Modal> — react-native-maps' native MapView crashes the app on
-          Android when mounted inside a Modal (it renders into a separate
-          Dialog window that the Google Maps SDK can't reliably attach to).
-          The customer-facing map (TrackOrderScreen) never crashes because
-          it's rendered inline on the screen, not inside a Modal — mirroring
-          that here avoids the native crash. */}
+      {/* ── MAP ── */}
       {mapModal && (
-        <View style={styles.mapModalContainer}>
-          <View style={styles.mapModalHeader}>
-            <Text style={styles.mapModalTitle}>
-              🗺️ Delivery #{mapDelivery?.id} — Location
-            </Text>
-            <TouchableOpacity onPress={() => setMapModal(false)}>
-              <Text style={styles.mapModalClose}>✕ Close</Text>
-            </TouchableOpacity>
-          </View>
-
-          {detailLoading ? (
-            <View style={styles.mapLoading}>
-              <ActivityIndicator size="large" color="#FF8000" />
-              <Text style={styles.loadingText}>Loading location info...</Text>
-            </View>
-          ) : (
-            <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.mapContent}>
-              {(() => {
-                const customerCoords = getCustomerCoords(mapDelivery);
-                const driverCoords = driverLocation
-                  ? { latitude: driverLocation.lat, longitude: driverLocation.lng }
-                  : null;
-                if (!customerCoords && !driverCoords) return null;
-                // No Google Maps key in this build → skip the native map (it would
-                // crash); the "Open in Maps" buttons below still work.
-                if (!mapsAvailable) return null;
-
-                const center = customerCoords || driverCoords!;
-                // Wide enough to comfortably fit both pins when both exist.
-                const delta = customerCoords && driverCoords
-                  ? Math.max(0.02, Math.abs(customerCoords.latitude - driverCoords.latitude) * 2.5)
-                  : 0.01;
-
-                return (
-                  <MapView
-                    style={styles.mapPreview}
-                    initialRegion={{
-                      latitude: center.latitude,
-                      longitude: center.longitude,
-                      latitudeDelta: delta,
-                      longitudeDelta: delta,
-                    }}
-                    region={{
-                      latitude: center.latitude,
-                      longitude: center.longitude,
-                      latitudeDelta: delta,
-                      longitudeDelta: delta,
-                    }}
-                  >
-                    {customerCoords && (
-                      <Marker coordinate={customerCoords} title="Customer" pinColor="#e74c3c" />
-                    )}
-                    {driverCoords && (
-                      <Marker coordinate={driverCoords} title="You" pinColor="#FF8000" />
-                    )}
-                  </MapView>
-                );
-              })()}
-
-              <View style={styles.locationCard}>
-                <View style={styles.locationIconCircle}>
-                  <Text style={styles.locationIcon}>🏠</Text>
-                </View>
-                <View style={styles.locationInfo}>
-                  <Text style={styles.locationTitle}>Customer Location</Text>
-                  <Text style={styles.locationAddress}>
-                    {mapDelivery?.delivery_address || mapDelivery?.dropoff_address || 'Address not available'}
-                  </Text>
-                  {getCustomerCoords(mapDelivery) ? (
-                    <Text style={styles.locationCoords}>
-                      {getCustomerCoords(mapDelivery)!.latitude.toFixed(5)}, {getCustomerCoords(mapDelivery)!.longitude.toFixed(5)}
-                    </Text>
-                  ) : (
-                    <Text style={styles.locationUnavailable}>GPS coordinates not shared</Text>
-                  )}
-                </View>
-              </View>
-
-              {getCustomerCoords(mapDelivery) ? (
-                <TouchableOpacity
-                  style={styles.openMapBtn}
-                  onPress={() => {
-                    const coords = getCustomerCoords(mapDelivery)!;
-                    openNativeMap(
-                      coords.latitude,
-                      coords.longitude,
-                      mapDelivery?.delivery_address || mapDelivery?.dropoff_address || 'Customer'
-                    );
-                  }}
-                >
-                  <Text style={styles.openMapBtnText}>📍 Open Customer Location in Maps</Text>
-                </TouchableOpacity>
-              ) : (
-                <View style={styles.noGpsBox}>
-                  <Text style={styles.noGpsEmoji}>📍</Text>
-                  <Text style={styles.noGpsTitle}>No GPS coordinates available</Text>
-                  <Text style={styles.noGpsSub}>Use the delivery address above to navigate.</Text>
-                </View>
-              )}
-
-              <TouchableOpacity
-                style={styles.searchAddressBtn}
-                onPress={() => {
-                  const address = encodeURIComponent(mapDelivery?.delivery_address || mapDelivery?.dropoff_address || '');
-                  Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${address}`);
-                }}
-              >
-                <Text style={styles.searchAddressBtnText}>
-                  🔍 Search Delivery Address in Google Maps
-                </Text>
-              </TouchableOpacity>
-
-              <View style={styles.locationCard}>
-                <View style={[styles.locationIconCircle, { backgroundColor: '#fff5f5' }]}>
-                  <Text style={styles.locationIcon}>🛵</Text>
-                </View>
-                <View style={styles.locationInfo}>
-                  <Text style={styles.locationTitle}>Your Location</Text>
-                  {driverLocation ? (
-                    <>
-                      <Text style={styles.locationCoords}>
-                        {driverLocation.lat.toFixed(5)}, {driverLocation.lng.toFixed(5)}
-                      </Text>
-                      <Text style={styles.locationLive}>🟢 Live — updating every 5 seconds</Text>
-                    </>
-                  ) : (
-                    <Text style={styles.locationUnavailable}>
-                      Turn on location sharing to see your position
-                    </Text>
-                  )}
-                </View>
-              </View>
-
-              {driverLocation && (
-                <TouchableOpacity
-                  style={[styles.openMapBtn, { backgroundColor: '#FF8000' }]}
-                  onPress={() => openNativeMap(driverLocation.lat, driverLocation.lng, 'My Location')}
-                >
-                  <Text style={styles.openMapBtnText}>🛵 Open My Location in Maps</Text>
-                </TouchableOpacity>
-              )}
-
-              <View style={styles.tipBox}>
-                <Text style={styles.tipTitle}>💡 Navigation Tip</Text>
-                <Text style={styles.tipText}>
-                  Tap "Open Customer Location in Maps" to get turn-by-turn directions.
-                </Text>
-              </View>
-              <View style={{ height: 30 }} />
-            </ScrollView>
-          )}
-        </View>
+        <FullScreenMap
+          loading={detailLoading}
+          onClose={() => setMapModal(false)}
+          emptyText="No GPS location for this delivery yet."
+          pins={[
+            ...(getCustomerCoords(mapDelivery)
+              ? [{ key: 'customer', coordinate: getCustomerCoords(mapDelivery)!, title: 'Customer', color: '#e74c3c' }]
+              : []),
+            ...(driverLocation
+              ? [{ key: 'me', coordinate: { latitude: driverLocation.lat, longitude: driverLocation.lng }, title: 'You', color: '#FF8000' }]
+              : []),
+          ]}
+        />
       )}
 
       {/* ── OTP MODAL ── */}

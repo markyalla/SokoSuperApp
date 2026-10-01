@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import { Image } from 'react-native';
 import {
   View, StyleSheet, TouchableOpacity,
-  ActivityIndicator, Alert, ScrollView, Linking, Platform, StatusBar, TextInput
+  ActivityIndicator, Alert, ScrollView, Linking, StatusBar, TextInput
 } from 'react-native';
 import { Text } from '../../../src/components/Text';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -10,6 +10,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import MapView, { Marker } from 'react-native-maps';
 import { mapsAvailable } from '../../../src/config/maps';
+import { FullScreenMap, MapPin } from '../../../src/components/FullScreenMap';
 import { getOrders, getOrderDetail, getDeliveryLocation, getCustomerOrderOTP, rateOrderDelivery, fileOrderComplaint } from '../../../src/api';
 import { friendlyError } from '../../../src/utils/friendlyError';
 
@@ -248,6 +249,7 @@ function TrackOrderView({ orderId, showMap }: { orderId: string; showMap: boolea
   const [order, setOrder] = useState<Order | null>(null);
   const [delivery, setDelivery] = useState<DeliveryInfo | null>(null);
   const [loading, setLoading] = useState(true);
+  const [fullMap, setFullMap] = useState(false);
   const [activeTab, setActiveTab] = useState<'status' | 'details' | 'driver' | 'location'>(
     showMap ? 'location' : 'status'
   );
@@ -362,19 +364,16 @@ function TrackOrderView({ orderId, showMap }: { orderId: string; showMap: boolea
     return idx >= 0 ? idx : 0;
   };
 
-  const openNativeMap = (lat: number, lng: number, label: string) => {
-    const url = Platform.OS === 'ios'
-      ? `maps:0,0?q=${lat},${lng}(${encodeURIComponent(label)})`
-      : `geo:${lat},${lng}?q=${lat},${lng}(${encodeURIComponent(label)})`;
-
-    Linking.canOpenURL(url).then(supported => {
-      if (supported) {
-        Linking.openURL(url);
-      } else {
-        Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${lat},${lng}`);
-      }
-    });
-  };
+  const customerCoords = (order?.delivery_lat != null && order?.delivery_lng != null)
+    ? { latitude: Number(order.delivery_lat), longitude: Number(order.delivery_lng) }
+    : null;
+  const driverCoords = (delivery?.vehicle_latitude != null && delivery?.vehicle_longitude != null)
+    ? { latitude: Number(delivery.vehicle_latitude), longitude: Number(delivery.vehicle_longitude) }
+    : null;
+  const mapPins: MapPin[] = [
+    ...(customerCoords ? [{ key: 'customer', coordinate: customerCoords, title: 'Your delivery location', color: '#FF8000' }] : []),
+    ...(driverCoords ? [{ key: 'driver', coordinate: driverCoords, title: delivery?.driver_name || 'Your driver', color: '#1D9E75' }] : []),
+  ];
 
   const getStatusColor = (status: string) => {
     switch (status?.toLowerCase()) {
@@ -782,11 +781,7 @@ function TrackOrderView({ orderId, showMap }: { orderId: string; showMap: boolea
                       </View>
                       <TouchableOpacity
                         style={[styles.openMapBtn, { marginTop: 12 }]}
-                        onPress={() => openNativeMap(
-                          delivery.vehicle_latitude!,
-                          delivery.vehicle_longitude!,
-                          `Driver — ${delivery.driver_name}`
-                        )}
+                        onPress={() => setFullMap(true)}
                       >
                         <Text style={styles.openMapBtnText}>
                           🗺️ See Driver on Map
@@ -813,15 +808,8 @@ function TrackOrderView({ orderId, showMap }: { orderId: string; showMap: boolea
         {activeTab === 'location' && (
           <View>
             {(() => {
-              const customerCoords = (order?.delivery_lat != null && order?.delivery_lng != null)
-                ? { latitude: Number(order.delivery_lat), longitude: Number(order.delivery_lng) }
-                : null;
-              const driverCoords = (delivery?.vehicle_latitude != null && delivery?.vehicle_longitude != null)
-                ? { latitude: Number(delivery.vehicle_latitude), longitude: Number(delivery.vehicle_longitude) }
-                : null;
-              if (!customerCoords && !driverCoords) return null;
-              // No Google Maps key in this build → skip the native map (it would
-              // crash); the address and "View in Google Maps" button below remain.
+              if (mapPins.length === 0) return null;
+              // No Google Maps key in this build → skip the native map (it would crash).
               if (!mapsAvailable) return null;
 
               const center = customerCoords || driverCoords!;
@@ -830,9 +818,19 @@ function TrackOrderView({ orderId, showMap }: { orderId: string; showMap: boolea
                 : 0.01;
 
               return (
-                <View style={[styles.section, { padding: 0, overflow: 'hidden' }]}>
+                <TouchableOpacity
+                  activeOpacity={0.9}
+                  onPress={() => setFullMap(true)}
+                  style={[styles.section, { padding: 0, overflow: 'hidden' }]}
+                >
                   <MapView
                     style={styles.mapPreview}
+                    pointerEvents="none"
+                    scrollEnabled={false}
+                    zoomEnabled={false}
+                    rotateEnabled={false}
+                    pitchEnabled={false}
+                    toolbarEnabled={false}
                     initialRegion={{ ...center, latitudeDelta: delta, longitudeDelta: delta }}
                     region={{ ...center, latitudeDelta: delta, longitudeDelta: delta }}
                   >
@@ -847,7 +845,11 @@ function TrackOrderView({ orderId, showMap }: { orderId: string; showMap: boolea
                       />
                     )}
                   </MapView>
-                </View>
+                  <View style={styles.expandHint} pointerEvents="none">
+                    <Ionicons name="expand" size={14} color="#fff" />
+                    <Text style={styles.expandHintText}>Tap to open full map</Text>
+                  </View>
+                </TouchableOpacity>
               );
             })()}
 
@@ -856,19 +858,6 @@ function TrackOrderView({ orderId, showMap }: { orderId: string; showMap: boolea
               <Text style={styles.locationAddress}>
                 {order?.delivery_address || 'No address provided'}
               </Text>
-              <TouchableOpacity
-                style={styles.openMapBtn}
-                onPress={() => {
-                  const address = encodeURIComponent(order?.delivery_address || '');
-                  Linking.openURL(
-                    `https://www.google.com/maps/search/?api=1&query=${address}`
-                  );
-                }}
-              >
-                <Text style={styles.openMapBtnText}>
-                  🔍 View Address in Google Maps
-                </Text>
-              </TouchableOpacity>
             </View>
 
             <View style={styles.section}>
@@ -894,18 +883,6 @@ function TrackOrderView({ orderId, showMap }: { orderId: string; showMap: boolea
                       )}
                     </View>
                   </View>
-                  <TouchableOpacity
-                    style={styles.openMapBtn}
-                    onPress={() => openNativeMap(
-                      delivery.vehicle_latitude!,
-                      delivery.vehicle_longitude!,
-                      `Driver — ${delivery.driver_name || 'Your Driver'}`
-                    )}
-                  >
-                    <Text style={styles.openMapBtnText}>
-                      📍 Open Driver Location in Maps
-                    </Text>
-                  </TouchableOpacity>
                 </View>
               ) : (
                 <View style={styles.noLocationBox}>
@@ -926,8 +903,7 @@ function TrackOrderView({ orderId, showMap }: { orderId: string; showMap: boolea
             <View style={styles.tipBox}>
               <Text style={styles.tipTitle}>💡 Tip</Text>
               <Text style={styles.tipText}>
-                Tap "Open Driver Location in Maps" to see exactly where your
-                driver is right now using Google Maps or Apple Maps.
+                Tap the map to open it full screen and follow your driver live.
               </Text>
             </View>
 
@@ -937,6 +913,14 @@ function TrackOrderView({ orderId, showMap }: { orderId: string; showMap: boolea
 
         <View style={{ height: 40 }} />
       </ScrollView>
+
+      {fullMap && (
+        <FullScreenMap
+          pins={mapPins}
+          onClose={() => setFullMap(false)}
+          emptyText="Driver location not available yet."
+        />
+      )}
     </SafeAreaView>
   );
 }
@@ -1043,6 +1027,11 @@ const styles = StyleSheet.create({
   },
   sectionTitle: { fontSize: 15, fontWeight: 'bold', color: '#1a1a1a', marginBottom: 16 },
   mapPreview: { width: '100%', height: 220 },
+  expandHint: {
+    position: 'absolute', right: 10, bottom: 10, flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: 14, paddingHorizontal: 10, paddingVertical: 6,
+  },
+  expandHintText: { color: '#fff', fontSize: 12, fontWeight: '600' },
   stepRow: { flexDirection: 'row', marginBottom: 0 },
   stepLeft: { alignItems: 'center', marginRight: 14 },
   stepCircle: {
