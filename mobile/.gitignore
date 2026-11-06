@@ -1,0 +1,38 @@
+# Binaries and executables
+bin/
+main
+sokoapp
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test and coverage artifacts
+*.test
+*.out
+*.prof
+
+# Environment variables and configuration secrets
+.env
+.env.local
+.env.*
+!.env.example
+
+# IDEs / Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+.expo/ 
+ 
+ 
+# Node / Expo
+node_modules/
+.expo/
+dist/
+web-build/
