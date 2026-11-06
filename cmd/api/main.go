@@ -17,7 +17,9 @@ import (
 	"sokoapp/internal/sokoindex"
 	"sokoapp/internal/sokosusu"
 	"sokoapp/internal/storage"
+	"sokoapp/internal/traffic"
 	"sokoapp/internal/utils"
+	"sokoapp/internal/weather"
 	"sokoapp/internal/webhooks"
 	"sokoapp/internal/worker"
 	"sokoapp/internal/ws"
@@ -568,6 +570,38 @@ func main() {
 					artisanOnly.PUT("/artisan/bookings/:id/complete", sokoindex.CompleteBooking(dbs.SokoIndex))
 				}
 			}
+		}
+
+		// Weather + SokoTraffic — server-side calls to Google Maps Platform
+		// (Weather, Routes, Places API (New)). Keys stay in the server env and
+		// are never sent to the app. Each feature answers 503 "not available"
+		// until its key is set, so the app degrades gracefully.
+		weatherClient := weather.NewClientFromEnv()
+		trafficClient := traffic.NewClientFromEnv()
+		if weatherClient.APIKey == "" {
+			log.Println("Info: GOOGLE_WEATHER_API_KEY / GOOGLE_MAPS_SERVER_KEY not set — weather endpoint disabled.")
+		}
+		if trafficClient.RoutesKey == "" {
+			log.Println("Info: GOOGLE_ROUTES_API_KEY / GOOGLE_MAPS_SERVER_KEY not set — SokoTraffic endpoints disabled.")
+		}
+
+		weatherGroup := v1.Group("/weather")
+		weatherGroup.Use(middleware.JWTAuthMiddleware())
+		{
+			weatherGroup.GET("/current",
+				middleware.RateLimitPerUser(rateLimitRedis, "weather", 20, time.Minute),
+				weather.GetCurrent(weatherClient, rateLimitRedis))
+		}
+
+		trafficGroup := v1.Group("/traffic")
+		trafficGroup.Use(middleware.JWTAuthMiddleware())
+		{
+			trafficGroup.POST("/routes",
+				middleware.RateLimitPerUser(rateLimitRedis, "traffic_routes", 20, time.Minute),
+				traffic.ComputeRoutesHandler(trafficClient))
+			placesLimit := middleware.RateLimitPerUser(rateLimitRedis, "traffic_places", 60, time.Minute)
+			trafficGroup.GET("/places/autocomplete", placesLimit, traffic.AutocompleteHandler(trafficClient))
+			trafficGroup.GET("/places/:id", placesLimit, traffic.PlaceDetailsHandler(trafficClient))
 		}
 
 		// SokoLoan Routes

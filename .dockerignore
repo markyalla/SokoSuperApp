@@ -1,0 +1,4 @@
+# The Go image only needs the backend; keep the Expo app and git data out of the build context.
+mobile/
+.git/
+*.exe

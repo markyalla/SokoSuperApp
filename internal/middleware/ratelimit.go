@@ -40,3 +40,35 @@ func RateLimit(client *redis.Client, keyPrefix string, limit int, window time.Du
 		c.Next()
 	}
 }
+
+// RateLimitPerUser is RateLimit keyed by the authenticated user instead of the
+// client IP, so many users behind one mobile-carrier NAT don't share a budget.
+// It must run after JWTAuthMiddleware; without a user_id it falls back to IP.
+// Used to protect paid upstream APIs (weather, routes, places) from one
+// account burning through the provider quota.
+func RateLimitPerUser(client *redis.Client, keyPrefix string, limit int, window time.Duration) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		who := c.GetString("user_id")
+		if who == "" {
+			who = "ip:" + c.ClientIP()
+		}
+		key := fmt.Sprintf("ratelimit:%s:%s", keyPrefix, who)
+
+		ctx := context.Background()
+		count, err := client.Incr(ctx, key).Result()
+		if err != nil {
+			c.Next()
+			return
+		}
+		if count == 1 {
+			client.Expire(ctx, key, window)
+		}
+		if count > int64(limit) {
+			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{
+				"error": "Too many requests. Please try again in a minute.",
+			})
+			return
+		}
+		c.Next()
+	}
+}

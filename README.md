@@ -76,6 +76,26 @@ All routes under `/api/v1/` except auth and webhooks.
 
 See `cmd/api/main.go` for the full route tree.
 
+### Weather + SokoTraffic (Google Maps Platform)
+| Endpoint | Google API | Rate limit (per user) |
+|---|---|---|
+| `GET /api/v1/weather/current?lat=&lng=` | Weather API (current conditions + hourly) | 20/min |
+| `POST /api/v1/traffic/routes` `{origin:{lat,lng}, destination:{lat,lng}, travel_mode: DRIVE\|TWO_WHEELER\|WALK}` | Routes API `computeRoutes` (traffic-aware, alternatives) | 20/min |
+| `GET /api/v1/traffic/places/autocomplete?q=&lat=&lng=&session=` | Places API (New) Autocomplete | 60/min |
+| `GET /api/v1/traffic/places/:id?session=` | Places API (New) Place Details | 60/min |
+
+Environment (server only, never in the app):
+```
+GOOGLE_WEATHER_API_KEY=   # key restricted to Weather API
+GOOGLE_ROUTES_API_KEY=    # key restricted to Routes API
+GOOGLE_PLACES_API_KEY=    # key restricted to Places API (New); falls back to the routes key
+GOOGLE_MAPS_SERVER_KEY=   # optional shared fallback for any of the above
+TRAFFIC_REGION_CODES=gh   # optional: limit destination search to these countries
+WEATHER_CACHE_SECONDS=0   # optional: Redis cache per ~1 km cell; only if Google's terms allow
+```
+A feature with no key answers `503 {"code":"not_configured"}` and the app hides it gracefully.
+Coordinates are rounded to ~1 km for weather, never logged, and no route history is stored.
+
 ## Registration Flow
 
 ```
