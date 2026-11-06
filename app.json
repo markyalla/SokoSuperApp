@@ -8,6 +8,7 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
+      "bundleIdentifier": "com.mysokoapp.app",
       "supportsTablet": true,
       "infoPlist": {
         "UIBackgroundModes": [
@@ -44,6 +45,7 @@
         "expo-location",
         {
           "locationAlwaysAndWhenInUsePermission": "MySokoApp needs your location in the background so customers and admins can track your delivery in real time while you're online.",
+          "locationWhenInUsePermission": "MySokoApp uses your location to show local weather updates and to plan routes from where you are in SokoTraffic.",
           "isAndroidBackgroundLocationEnabled": true,
           "isIosBackgroundLocationEnabled": true
         }

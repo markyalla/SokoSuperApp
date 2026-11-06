@@ -10,3 +10,13 @@ export const mapsAvailable: boolean =
   Platform.OS !== 'android' ||
   Constants.executionEnvironment === 'storeClient' ||
   Constants.expoConfig?.extra?.googleMapsEnabled === true;
+
+// SokoTraffic draws Google Routes API content, which Google's terms only allow
+// on a Google map. Android maps are always Google; on iOS react-native-maps
+// defaults to Apple Maps, so the route map is only shown there when the app
+// was built with GOOGLE_MAPS_IOS_API_KEY (provider="google"). Otherwise the
+// screen lists routes and hands off to the Google Maps app.
+export const googleRouteMapAvailable: boolean =
+  Platform.OS === 'android'
+    ? mapsAvailable
+    : Platform.OS === 'ios' && Constants.expoConfig?.extra?.googleMapsIosEnabled === true;

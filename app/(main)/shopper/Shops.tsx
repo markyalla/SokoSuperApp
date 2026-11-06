@@ -14,6 +14,7 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import Toast from '../../../src/components/Toast';
 import { friendlyError } from '../../../src/utils/friendlyError';
+import { GRID_COLUMNS, GRID_THRESHOLD, isGridRow, toGridRows } from '../../../src/utils/gridRows';
 
 const { height: SCREEN_H, width: SCREEN_W } = Dimensions.get('window');
 
@@ -464,6 +465,107 @@ export default function ShopsScreen() {
     );
   };
 
+  // Compact cards used when there are many items, three across a row.
+  const renderStoreCompact = (item: any) => {
+    const isOpen = item.is_open !== false;
+    return (
+      <TouchableOpacity
+        style={[styles.gridCard, !isOpen && styles.cardClosed]}
+        onPress={() => {
+          if (!isOpen) {
+            Alert.alert('Shop Closed', `${item.name} is currently closed.`);
+            return;
+          }
+          router.push({ pathname: '/shopper/ShopDetailScreen', params: { shopId: String(item.id) } } as any);
+        }}
+        activeOpacity={0.85}
+      >
+        <GlowImage
+          uri={item.cover_image_url || item.logo_url}
+          style={styles.gridImage}
+          radius={0}
+          placeholderEmoji="🛍️"
+          shimmerWidth={GRID_CELL_W}
+        />
+        {!isOpen && (
+          <View style={styles.gridClosedOverlay}>
+            <Text style={styles.gridClosedText}>CLOSED</Text>
+          </View>
+        )}
+        <View style={styles.gridBody}>
+          <Text style={styles.gridName} numberOfLines={1}>{item.name}</Text>
+          <Text style={styles.gridSub} numberOfLines={1}>{item.address}</Text>
+          <Text style={[styles.gridStatus, !isOpen && styles.closedText]}>
+            {isOpen ? '● Open' : '● Closed'}
+          </Text>
+        </View>
+      </TouchableOpacity>
+    );
+  };
+
+  const renderProductCompact = (item: any) => {
+    const id = getProductId(item);
+    const cartItem = cart[id];
+    return (
+      <TouchableOpacity
+        style={styles.gridCard}
+        activeOpacity={0.9}
+        onPress={() => openProductDetail(item)}
+      >
+        <GlowImage
+          uri={item.image_url}
+          style={styles.gridImage}
+          radius={0}
+          placeholderEmoji="🍱"
+          shimmerWidth={GRID_CELL_W}
+        />
+        {cartItem ? (
+          <View style={styles.gridQtyBadge}>
+            <Text style={styles.gridQtyBadgeText}>{cartItem.quantity}</Text>
+          </View>
+        ) : null}
+        <View style={styles.gridBody}>
+          <Text style={styles.gridName} numberOfLines={1}>{item.name}</Text>
+          <View style={styles.gridPriceRow}>
+            <Text style={styles.gridPrice} numberOfLines={1}>GHS {(item.base_price || 0).toFixed(2)}</Text>
+            <TouchableOpacity
+              style={styles.gridAddBtn}
+              hitSlop={8}
+              onPress={(e) => {
+                e.stopPropagation();
+                if (cartItem) updateQuantity(id, cartItem.quantity + 1);
+                else handleAddToCart(item);
+              }}
+              accessibilityLabel={`Add ${item.name} to cart`}
+            >
+              <Ionicons name="add" size={16} color="#fff" />
+            </TouchableOpacity>
+          </View>
+        </View>
+      </TouchableOpacity>
+    );
+  };
+
+  const baseListData: any[] = selectedCategory ? filtered : sectionedStores;
+  const useGrid = filtered.length > GRID_THRESHOLD;
+  const listData: any[] = useGrid ? toGridRows(baseListData, GRID_COLUMNS) : baseListData;
+
+  const renderGridRow = (row: { items: any[] }, index: number) => (
+    <Animated.View
+      entering={FadeInDown.delay(Math.min(index, 6) * 60).duration(380).easing(Easing.out(Easing.cubic))}
+      style={styles.gridRow}
+    >
+      {row.items.map((it) => (
+        <View key={String(it.id)} style={styles.gridCell}>
+          {selectedCategory ? renderProductCompact(it) : renderStoreCompact(it)}
+        </View>
+      ))}
+      {Array.from({ length: GRID_COLUMNS - row.items.length }).map((_, i) => (
+        <View key={`pad_${i}`} style={styles.gridCell} />
+      ))}
+    </Animated.View>
+  );
+
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
@@ -549,12 +651,14 @@ export default function ShopsScreen() {
 
       {/* List */}
       <FlatList
-        data={selectedCategory ? filtered : sectionedStores}
+        key={useGrid ? 'grid' : 'list'}
+        data={listData}
         keyExtractor={(item) => String(item.id)}
         renderItem={({ item, index }) => {
           if ((item as any).__sectionHeader) {
             return <Text style={styles.sectionHeader}>{(item as any).title}</Text>;
           }
+          if (isGridRow(item)) return renderGridRow(item, index);
           return selectedCategory ? renderProduct({ item }) : renderStore({ item, index });
         }}
         contentContainerStyle={styles.list}
@@ -717,6 +821,9 @@ export default function ShopsScreen() {
 }
 
 const CARD_RADIUS = 28;
+// List padding is 16 each side; 10px gap between the three grid cells.
+const GRID_GAP = 10;
+const GRID_CELL_W = (SCREEN_W - 32 - GRID_GAP * (GRID_COLUMNS - 1)) / GRID_COLUMNS;
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff' },
@@ -866,6 +973,36 @@ const styles = StyleSheet.create({
   },
   openText: { color: '#FF8000', fontSize: 12, fontWeight: '600' },
   orderNow: { color: '#FF8000', fontSize: 13, fontWeight: '700' },
+  // ---- Compact 3-across grid (used when there are many cards) ----
+  gridRow: { flexDirection: 'row', gap: GRID_GAP, marginBottom: GRID_GAP + 4 },
+  gridCell: { flex: 1 },
+  gridCard: {
+    backgroundColor: '#fff', borderRadius: 14, overflow: 'hidden',
+    elevation: 3, shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1, shadowRadius: 6,
+    borderWidth: 1, borderColor: 'rgba(255, 128, 0, 0.08)',
+  },
+  gridImage: { width: '100%', height: GRID_CELL_W * 0.9 },
+  gridClosedOverlay: {
+    position: 'absolute', top: 0, left: 0, right: 0, height: GRID_CELL_W * 0.9,
+    backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'center', alignItems: 'center', zIndex: 1,
+  },
+  gridClosedText: { color: '#fff', fontWeight: '800', fontSize: 11, letterSpacing: 1 },
+  gridBody: { paddingHorizontal: 8, paddingTop: 6, paddingBottom: 8 },
+  gridName: { fontSize: 12.5, fontWeight: '700', color: '#111827' },
+  gridSub: { fontSize: 10.5, color: '#64748b', marginTop: 1 },
+  gridStatus: { fontSize: 10.5, fontWeight: '600', color: '#FF8000', marginTop: 3 },
+  gridPriceRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 4 },
+  gridPrice: { flex: 1, fontSize: 11.5, fontWeight: '700', color: '#FF8000', marginRight: 4 },
+  gridAddBtn: {
+    width: 24, height: 24, borderRadius: 12, backgroundColor: '#FF8000',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  gridQtyBadge: {
+    position: 'absolute', top: 6, right: 6, minWidth: 22, height: 22, borderRadius: 11,
+    backgroundColor: '#FF8000', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 5,
+  },
+  gridQtyBadgeText: { color: '#fff', fontSize: 11, fontWeight: '800' },
   emptyState: { alignItems: 'center', paddingVertical: 60 },
   emptyEmoji: { fontSize: 52, marginBottom: 12 },
   emptyTitle: { fontSize: 18, fontWeight: 'bold', color: '#333' },

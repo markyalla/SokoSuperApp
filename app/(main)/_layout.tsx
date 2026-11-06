@@ -5,6 +5,7 @@ import { useRealtimeUpdates } from '../../src/hooks/useRealtimeUpdates';
 import { useDriverAssignmentAlerts } from '../../src/hooks/useDriverAssignmentAlerts';
 import Toast from '../../src/components/Toast';
 import IncomingOrderPopup from '../../src/components/IncomingOrderPopup';
+import WeatherUpdates from '../../src/components/WeatherUpdates';
 
 export default function MainLayout() {
   const router = useRouter();
@@ -31,6 +32,7 @@ export default function MainLayout() {
         onHide={hideToast}
       />
       <IncomingOrderPopup />
+      <WeatherUpdates />
     </View>
   );
 }

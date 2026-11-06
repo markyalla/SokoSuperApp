@@ -12,6 +12,7 @@ import { getStore, getStoreProducts } from '../../../src/api';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import Toast from '../../../src/components/Toast';
 import { friendlyError } from '../../../src/utils/friendlyError';
+import { GRID_COLUMNS, GRID_THRESHOLD, isGridRow, toGridRows } from '../../../src/utils/gridRows';
 
 interface Product {
   id: string | number;
@@ -37,6 +38,9 @@ interface Store {
 };
 
 const { height: SCREEN_H, width: SCREEN_W } = Dimensions.get('window');
+// Menu padding is 16 each side; 10px gap between the three grid cells.
+const GRID_GAP = 10;
+const GRID_CELL_W = (SCREEN_W - 32 - GRID_GAP * (GRID_COLUMNS - 1)) / GRID_COLUMNS;
 
 /**
  * GlowImage
@@ -271,6 +275,51 @@ export default function ShopDetailScreen() {
     );
   };
 
+  // Compact card used when the menu is long, three across a row.
+  const renderFoodItemCompact = (item: Product) => {
+    const added = addedItems[String(item.id)];
+    return (
+      <TouchableOpacity
+        style={styles.gridCard}
+        activeOpacity={0.9}
+        onPress={() => openProductDetails(item)}
+      >
+        <GlowImage
+          uri={item.image_url || store?.logo_url}
+          style={styles.gridImage}
+          radius={0}
+          placeholderEmoji="🍱"
+          shimmerWidth={GRID_CELL_W}
+        />
+        {item.holiday_pricing && (
+          <View style={styles.gridHolidayBadge}>
+            <Text style={styles.gridHolidayText}>🎉</Text>
+          </View>
+        )}
+        <View style={styles.gridBody}>
+          <Text style={styles.gridName} numberOfLines={1}>{item.name}</Text>
+          <View style={styles.gridPriceRow}>
+            <Text style={styles.gridPrice} numberOfLines={1}>GHS {(item.base_price || 0).toFixed(2)}</Text>
+            <TouchableOpacity
+              style={[styles.gridAddBtn, added && styles.gridAddBtnAdded]}
+              hitSlop={8}
+              onPress={(event) => {
+                event.stopPropagation();
+                handleAddToCart(item);
+              }}
+              accessibilityLabel={`Add ${item.name} to cart`}
+            >
+              <Ionicons name={added ? 'checkmark' : 'add'} size={16} color="#fff" />
+            </TouchableOpacity>
+          </View>
+        </View>
+      </TouchableOpacity>
+    );
+  };
+
+  const useGrid = products.length > GRID_THRESHOLD;
+  const menuData: any[] = useGrid ? toGridRows(products as any[], GRID_COLUMNS) : products;
+
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
@@ -329,9 +378,23 @@ export default function ShopDetailScreen() {
 
       {/* Menu */}
       <FlatList
-        data={products}
+        key={useGrid ? 'grid' : 'list'}
+        data={menuData}
         keyExtractor={item => String(item.id)}
-        renderItem={renderFoodItem}
+        renderItem={({ item }) =>
+          isGridRow<Product>(item) ? (
+            <View style={styles.gridRow}>
+              {item.items.map((p) => (
+                <View key={String(p.id)} style={styles.gridCell}>{renderFoodItemCompact(p)}</View>
+              ))}
+              {Array.from({ length: GRID_COLUMNS - item.items.length }).map((_, i) => (
+                <View key={`pad_${i}`} style={styles.gridCell} />
+              ))}
+            </View>
+          ) : (
+            renderFoodItem({ item })
+          )
+        }
         contentContainerStyle={styles.menuList}
         showsVerticalScrollIndicator={false}
         ListHeaderComponent={
@@ -601,6 +664,30 @@ const styles = StyleSheet.create({
     elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 4,
   },
   addBtnAdded: { backgroundColor: 'rgba(22,163,74,0.92)' },
+  // ---- Compact 3-across grid (used when the menu is long) ----
+  gridRow: { flexDirection: 'row', gap: GRID_GAP, marginBottom: GRID_GAP + 4 },
+  gridCell: { flex: 1 },
+  gridCard: {
+    backgroundColor: '#fff', borderRadius: 14, overflow: 'hidden',
+    elevation: 3, shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1, shadowRadius: 6,
+    borderWidth: 1, borderColor: 'rgba(255, 128, 0, 0.08)',
+  },
+  gridImage: { width: '100%', height: GRID_CELL_W * 0.9 },
+  gridBody: { paddingHorizontal: 8, paddingTop: 6, paddingBottom: 8 },
+  gridName: { fontSize: 12.5, fontWeight: '700', color: '#111827' },
+  gridPriceRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 4 },
+  gridPrice: { flex: 1, fontSize: 11.5, fontWeight: '700', color: '#FF8000', marginRight: 4 },
+  gridAddBtn: {
+    width: 24, height: 24, borderRadius: 12, backgroundColor: '#FF8000',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  gridAddBtnAdded: { backgroundColor: '#16a34a' },
+  gridHolidayBadge: {
+    position: 'absolute', top: 6, left: 6, borderRadius: 10,
+    backgroundColor: 'rgba(255,128,0,0.92)', paddingHorizontal: 5, paddingVertical: 2,
+  },
+  gridHolidayText: { fontSize: 11 },
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(15, 23, 42, 0.65)',

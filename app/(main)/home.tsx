@@ -54,6 +54,15 @@ const APPS = [
     featureRoutes: ['/sokoindex', '/sokoindex/apply', '/sokoindex/my-bookings', '/sokoindex/my-portfolio'],
     btnColor: '#FF8000',
   },
+  {
+    key: 'traffic', name: 'SokoTraffic', route: '/traffic',
+    icon: 'navigate-outline', color: '#FF8000', bg: '#FFFFFF',
+    subtitle: 'Live-traffic routes',
+    features: ['Plan a route', 'Compare routes by traffic', 'Navigate with Google Maps'],
+    featureIcons: ['map-outline', 'git-compare-outline', 'navigate-outline'],
+    featureRoutes: ['/traffic', '/traffic', '/traffic'],
+    btnColor: '#FF8000',
+  },
   // SokoLoan hidden from users for now — re-enable by uncommenting.
   // {
   //   key: 'loan', name: 'SokoLoan', route: '/coming-soon',
